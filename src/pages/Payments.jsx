@@ -35,15 +35,24 @@ export default function Payments() {
 
   const handleDelete = async (id) => {
     if (!confirm('Delete this payment record?')) return;
+    const payment = payments.find(p => p.id === id);
     await supabase.from('payments').delete().eq('id', id);
+    if (payment?.invoice_id) {
+      const { data: remainingPayments } = await supabase.from('payments').select('amount').eq('invoice_id', payment.invoice_id);
+      const totalPaid = remainingPayments?.reduce((sum, p) => sum + p.amount, 0) ?? 0;
+      const { data: inv } = await supabase.from('invoices').select('total').eq('id', payment.invoice_id).single();
+      const newBalance = (inv?.total || 0) - totalPaid;
+      const newStatus = newBalance <= 0 ? 'Paid' : totalPaid > 0 ? 'Partial' : 'Unpaid';
+      await supabase.from('invoices').update({ balance_due: newBalance, status: newStatus }).eq('id', payment.invoice_id);
+    }
     load();
   };
 
   const filtered = payments.filter(p => {
     const q = search.toLowerCase();
-    const clientName = p.invoices?.clients?.name || '';
+    const clientName = p.invoices?.clients?.business_name || '';
     const invNum = p.invoices?.invoice_number || '';
-    const matchSearch = !q || clientName.toLowerCase().includes(q) || invNum.toLowerCase().includes(q) || (p.reference || '').toLowerCase().includes(q);
+    const matchSearch = !q || clientName.toLowerCase().includes(q) || invNum.toLowerCase().includes(q) || (p.reference_num || '').toLowerCase().includes(q);
     const matchMethod = methodFilter === 'all' || p.method === methodFilter;
     const matchFrom = !dateFrom || p.payment_date >= dateFrom;
     const matchTo = !dateTo || p.payment_date <= dateTo;
@@ -118,7 +127,7 @@ export default function Payments() {
                   <td className="font-mono" style={{ fontSize: '0.8rem', color: 'var(--text-muted)' }}>{p.invoices?.invoice_number || '—'}</td>
                   <td className="text-right" style={{ fontWeight: 700, color: 'var(--success)' }}>{fmt(p.amount)}</td>
                   <td><span className="badge badge-draft">{p.method || '—'}</span></td>
-                  <td style={{ color: 'var(--text-secondary)', fontSize: '0.85rem' }}>{p.reference || '—'}</td>
+                  <td style={{ color: 'var(--text-secondary)', fontSize: '0.85rem' }}>{p.reference_num || '—'}</td>
                   <td style={{ color: 'var(--text-muted)', fontSize: '0.8rem', maxWidth: 180 }}>{p.notes || ''}</td>
                   <td>
                     <div className="btn-group" style={{ justifyContent: 'flex-end' }}>

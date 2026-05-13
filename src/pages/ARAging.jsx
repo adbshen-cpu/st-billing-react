@@ -1,6 +1,9 @@
 import { useState, useEffect } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { supabase } from '../lib/supabase';
+import { useAuth } from '../contexts/AuthContext';
+import * as XLSX from 'xlsx';
+import { InvoiceModal } from './Invoices';
 
 const fmt = (n) => new Intl.NumberFormat('en-US', { style: 'currency', currency: 'USD' }).format(n || 0);
 const fmtDate = (d) => d ? new Date(d).toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' }) : '—';
@@ -21,10 +24,63 @@ function rowClass(days) {
   return 'row-overdue';
 }
 
+
+function InvoiceViewModal({ invoice, onClose, onEdit }) {
+  if (!invoice) return null;
+  return (
+    <div className="modal-overlay" onClick={e => e.target === e.currentTarget && onClose()}>
+      <div className="modal">
+        <div className="modal-header">
+          <h3>Invoice {invoice.invoice_number}</h3>
+          <button className="btn-icon" onClick={onClose}><span className="material-symbols-outlined">close</span></button>
+        </div>
+        <div className="modal-body">
+          <div className="info-grid">
+            <div className="info-item"><span className="info-label">Client</span><span className="info-value">{invoice.clientName}</span></div>
+            <div className="info-item"><span className="info-label">Aging Bucket</span><span className="info-value"><AgingBucket days={invoice.daysOld} /></span></div>
+            <div className="info-item"><span className="info-label">Invoice Date</span><span className="info-value">{fmtDate(invoice.issue_date)}</span></div>
+            <div className="info-item"><span className="info-label">Due Date</span><span className="info-value">{fmtDate(invoice.due_date)}</span></div>
+            <div className="info-item"><span className="info-label">Total Invoiced</span><span className="info-value" style={{ fontWeight: 700 }}>{fmt(invoice.total)}</span></div>
+            <div className="info-item"><span className="info-label">Paid</span><span className="info-value" style={{ color: 'var(--success)', fontWeight: 600 }}>{fmt(invoice.paid)}</span></div>
+            <div className="info-item"><span className="info-label">Balance Due</span><span className="info-value" style={{ color: 'var(--danger)', fontWeight: 700 }}>{fmt(invoice.balance)}</span></div>
+            <div className="info-item">
+              <span className="info-label">Days Overdue</span>
+              <span className="info-value" style={{ fontWeight: 600, color: invoice.daysOld > 30 ? 'var(--danger)' : invoice.daysOld > 15 ? 'var(--warning)' : 'var(--success)' }}>
+                {invoice.daysOld > 0 ? `${invoice.daysOld}d overdue` : invoice.daysOld === 0 ? 'Due today' : `${Math.abs(invoice.daysOld)}d remaining`}
+              </span>
+            </div>
+            <div className="info-item">
+              <span className="info-label">QuickBooks</span>
+              <span className="info-value">{invoice.in_quickbooks ? '✅ Synced' : '⬜ Not synced'}</span>
+            </div>
+          </div>
+          {invoice.notes && (
+            <div style={{ marginTop: 16 }}>
+              <div className="info-label">Notes</div>
+              <p style={{ marginTop: 4, fontSize: '0.875rem', color: 'var(--text-secondary)', whiteSpace: 'pre-wrap' }}>{invoice.notes}</p>
+            </div>
+          )}
+        </div>
+        <div className="modal-footer">
+          <button className="btn btn-secondary" onClick={onClose}>Close</button>
+          {!['paid', 'void'].includes((invoice.status || '').toLowerCase()) && (
+            <button className="btn btn-primary" onClick={onEdit}>
+              <span className="material-symbols-outlined">edit</span> Edit
+            </button>
+          )}
+        </div>
+      </div>
+    </div>
+  );
+}
+
 export default function ARAging() {
   const navigate = useNavigate();
+  const { user } = useAuth();
   const [items, setItems] = useState([]);
   const [loading, setLoading] = useState(true);
+  const [viewInvoice, setViewInvoice] = useState(null);
+  const [editInvoice, setEditInvoice] = useState(null);
 
   useEffect(() => { load(); }, []);
 
@@ -53,11 +109,60 @@ export default function ARAging() {
     }
   };
 
+  const toggleQB = async (e, row) => {
+    e.stopPropagation();
+    const newVal = !row.in_quickbooks;
+    await supabase.from('invoices').update({ in_quickbooks: newVal }).eq('id', row.id);
+    setItems(prev => prev.map(r => r.id === row.id ? { ...r, in_quickbooks: newVal } : r));
+  };
+
   const current = items.filter(r => r.daysOld <= 15);
   const warning = items.filter(r => r.daysOld > 15 && r.daysOld <= 30);
   const overdue = items.filter(r => r.daysOld > 30);
-
   const sumBalance = (arr) => arr.reduce((s, r) => s + r.balance, 0);
+
+  const exportExcel = () => {
+    const clientMap = {};
+    items.forEach(r => {
+      if (!clientMap[r.clientName]) {
+        clientMap[r.clientName] = { current: 0, d31_60: 0, d61_90: 0, d91_120: 0, d120plus: 0 };
+      }
+      const b = r.balance;
+      const d = r.daysOld;
+      if (d <= 30) clientMap[r.clientName].current += b;
+      else if (d <= 60) clientMap[r.clientName].d31_60 += b;
+      else if (d <= 90) clientMap[r.clientName].d61_90 += b;
+      else if (d <= 120) clientMap[r.clientName].d91_120 += b;
+      else clientMap[r.clientName].d120plus += b;
+    });
+
+    const money = (n) => parseFloat(n.toFixed(2));
+    const rows = Object.entries(clientMap).map(([name, b]) => ({
+      'Client': name,
+      'Current (0–30d)': money(b.current),
+      '31–60 Days': money(b.d31_60),
+      '61–90 Days': money(b.d61_90),
+      '91–120 Days': money(b.d91_120),
+      '120+ Days': money(b.d120plus),
+      'Total': money(b.current + b.d31_60 + b.d61_90 + b.d91_120 + b.d120plus),
+    }));
+
+    const totals = rows.reduce((acc, r) => ({
+      'Client': 'TOTAL',
+      'Current (0–30d)': acc['Current (0–30d)'] + r['Current (0–30d)'],
+      '31–60 Days': acc['31–60 Days'] + r['31–60 Days'],
+      '61–90 Days': acc['61–90 Days'] + r['61–90 Days'],
+      '91–120 Days': acc['91–120 Days'] + r['91–120 Days'],
+      '120+ Days': acc['120+ Days'] + r['120+ Days'],
+      'Total': acc['Total'] + r['Total'],
+    }), { 'Client': '', 'Current (0–30d)': 0, '31–60 Days': 0, '61–90 Days': 0, '91–120 Days': 0, '120+ Days': 0, 'Total': 0 });
+
+    const ws = XLSX.utils.json_to_sheet([...rows, totals]);
+    const wb = XLSX.utils.book_new();
+    XLSX.utils.book_append_sheet(wb, ws, 'AR Aging');
+    const date = new Date().toISOString().split('T')[0];
+    XLSX.writeFile(wb, `AR_Aging_${date}.xlsx`);
+  };
 
   if (loading) return (
     <div className="page-wrapper">
@@ -68,8 +173,20 @@ export default function ARAging() {
   return (
     <div className="page-wrapper">
       <div className="page-header">
-        <h2>AR Aging Report</h2>
-        <span style={{ fontSize: '0.8rem', color: 'var(--text-muted)' }}>As of {new Date().toLocaleDateString('en-US', { month: 'long', day: 'numeric', year: 'numeric' })}</span>
+        <div>
+          <h2>AR Aging Report</h2>
+          <span style={{ fontSize: '0.8rem', color: 'var(--text-muted)' }}>As of {new Date().toLocaleDateString('en-US', { month: 'long', day: 'numeric', year: 'numeric' })}</span>
+        </div>
+        <div className="page-header-actions no-print">
+          <button className="btn btn-secondary btn-sm" onClick={() => window.print()}>
+            <span className="material-symbols-outlined">print</span>
+            Export PDF
+          </button>
+          <button className="btn btn-secondary btn-sm" onClick={exportExcel}>
+            <span className="material-symbols-outlined">table_view</span>
+            Export Excel
+          </button>
+        </div>
       </div>
 
       <div className="aging-summary">
@@ -110,12 +227,13 @@ export default function ARAging() {
                 <th className="text-right">Balance Due</th>
                 <th>Age (Days)</th>
                 <th>Bucket</th>
+                <th style={{ textAlign: 'center' }}>QB</th>
               </tr>
             </thead>
             <tbody>
               {items.length === 0 ? (
                 <tr>
-                  <td colSpan={9}>
+                  <td colSpan={10}>
                     <div className="empty-state">
                       <span className="material-symbols-outlined" style={{ color: 'var(--success)' }}>check_circle</span>
                       <p style={{ color: 'var(--success)' }}>All invoices are current — no outstanding AR</p>
@@ -123,13 +241,23 @@ export default function ARAging() {
                   </td>
                 </tr>
               ) : items.map(row => (
-                <tr
-                  key={row.id}
-                  className={`clickable ${rowClass(row.daysOld)}`}
-                  onClick={() => navigate(`/clients/${row.client_id}`)}
-                >
-                  <td style={{ fontWeight: 600, color: 'var(--text)' }}>{row.clientName}</td>
-                  <td className="font-mono" style={{ fontSize: '0.8rem', color: 'var(--primary)', fontWeight: 600 }}>{row.invoice_number}</td>
+                <tr key={row.id} className={rowClass(row.daysOld)}>
+                  <td
+                    style={{ fontWeight: 600, color: 'var(--primary)', cursor: 'pointer' }}
+                    onClick={() => navigate(`/clients/${row.client_id}`)}
+                    title="Go to client"
+                  >
+                    {row.clientName}
+                  </td>
+                  <td
+                    className="font-mono"
+                    style={{ fontSize: '0.8rem', color: 'var(--primary)', fontWeight: 600, cursor: 'pointer', textDecoration: 'underline' }}
+                    onClick={() => setViewInvoice(row)}
+                    title="View invoice"
+                  >
+                    {row.invoice_number}
+                    {row.in_quickbooks && <span style={{ fontSize: '0.6rem', background: '#22c55e', color: 'white', borderRadius: 3, padding: '1px 4px', marginLeft: 5, fontWeight: 700, verticalAlign: 'middle', textDecoration: 'none', display: 'inline-block' }}>QB</span>}
+                  </td>
                   <td style={{ fontSize: '0.82rem', color: 'var(--text-muted)' }}>{fmtDate(row.issue_date)}</td>
                   <td style={{ fontSize: '0.82rem', color: row.daysOld > 0 ? 'var(--danger)' : 'var(--text-muted)' }}>{fmtDate(row.due_date)}</td>
                   <td className="text-right" style={{ color: 'var(--text-secondary)' }}>{fmt(row.total)}</td>
@@ -139,12 +267,39 @@ export default function ARAging() {
                     {row.daysOld > 0 ? `${row.daysOld}d overdue` : row.daysOld === 0 ? 'Due today' : `${Math.abs(row.daysOld)}d remaining`}
                   </td>
                   <td><AgingBucket days={row.daysOld} /></td>
+                  <td style={{ textAlign: 'center' }}>
+                    <input
+                      type="checkbox"
+                      checked={!!row.in_quickbooks}
+                      onChange={e => toggleQB(e, row)}
+                      title="Synced to QuickBooks"
+                      style={{ cursor: 'pointer', width: 16, height: 16 }}
+                    />
+                  </td>
                 </tr>
               ))}
             </tbody>
           </table>
         </div>
       </div>
+
+      {viewInvoice && (
+        <InvoiceViewModal
+          invoice={viewInvoice}
+          onClose={() => setViewInvoice(null)}
+          onEdit={() => { setEditInvoice(viewInvoice); setViewInvoice(null); }}
+        />
+      )}
+
+      {editInvoice && (
+        <InvoiceModal
+          mode="edit"
+          invoice={editInvoice}
+          clients={[{ id: editInvoice.client_id, business_name: editInvoice.clientName }]}
+          onClose={() => setEditInvoice(null)}
+          onSaved={load}
+        />
+      )}
     </div>
   );
 }

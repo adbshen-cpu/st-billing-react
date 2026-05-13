@@ -40,7 +40,7 @@ export default function Clients() {
       (c.business_name || '').toLowerCase().includes(q) ||
       (c.primary_email || '').toLowerCase().includes(q) ||
       (c.primary_phone || '').includes(q);
-    const matchStatus = statusFilter === 'all' || c.status === statusFilter;
+    const matchStatus = statusFilter === 'all' || (c.status || '').toLowerCase() === statusFilter.toLowerCase();
     const matchType = typeFilter === 'all' || c.entity_type === typeFilter;
     return matchSearch && matchStatus && matchType;
   });

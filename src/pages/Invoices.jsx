@@ -19,13 +19,12 @@ function StatusBadge({ status }) {
   return <span className={`badge badge-${s}`}>{status}</span>;
 }
 
-const emptyLine = () => ({ id: crypto.randomUUID(), description: '', quantity: '1', rate: '', proration_factor: '1', amount: 0 });
+const emptyLine = () => ({ id: crypto.randomUUID(), description: '', rate: '', proration_factor: '1', amount: 0, isCustom: false });
 
 function calcLineAmount(line) {
-  const q = parseFloat(line.quantity) || 0;
   const r = parseFloat(line.rate) || 0;
   const p = parseFloat(line.proration_factor) || 1;
-  return q * r * p;
+  return r * p;
 }
 
 function generateInvoicePDF(invoice, lines, clientName) {
@@ -74,7 +73,6 @@ function generateInvoicePDF(invoice, lines, clientName) {
 
   const tableBody = lines.map(l => [
     l.description || '',
-    l.quantity || '1',
     fmt(l.rate),
     l.proration_factor && parseFloat(l.proration_factor) !== 1 ? `${(parseFloat(l.proration_factor) * 100).toFixed(0)}%` : '100%',
     fmt(l.amount),
@@ -82,11 +80,11 @@ function generateInvoicePDF(invoice, lines, clientName) {
 
   doc.autoTable({
     startY: 75,
-    head: [['Description', 'Qty', 'Rate', 'Proration', 'Amount']],
+    head: [['Description', 'Rate', 'Proration', 'Amount']],
     body: tableBody,
     headStyles: { fillColor: primary, fontSize: 8, fontStyle: 'bold' },
     bodyStyles: { fontSize: 8 },
-    columnStyles: { 4: { halign: 'right' } },
+    columnStyles: { 3: { halign: 'right' } },
     styles: { cellPadding: 4 },
     margin: { left: 14, right: 14 },
   });
@@ -149,16 +147,16 @@ function PaymentModal({ invoice, balance, onClose, onSaved }) {
     setSaving(true);
     await supabase.from('payments').insert({
       invoice_id: invoice.id, client_id: invoice.client_id,
-      amount: amt, date: form.date, method: form.method,
-      reference: form.reference || null, notes: form.notes || null,
+      amount: amt, payment_date: form.date, method: form.method,
+      reference_num: form.reference || null, notes: form.notes || null,
     });
     const newBalance = balance - amt;
     const newStatus = newBalance <= 0 ? 'paid' : 'partial';
     await supabase.from('invoices').update({ status: newStatus }).eq('id', invoice.id);
     await supabase.from('activity_log').insert({
-      client_id: invoice.client_id, user_id: user?.id,
-      action: 'Payment Recorded',
-      details: `Payment of ${fmt(amt)} recorded for invoice ${invoice.invoice_number}`,
+      client_id: invoice.client_id, created_by: user?.id,
+      type: 'Payment Recorded',
+      description: `Payment of ${fmt(amt)} recorded for invoice ${invoice.invoice_number}`,
     });
     setSaving(false);
     onSaved();
@@ -215,7 +213,7 @@ function PaymentModal({ invoice, balance, onClose, onSaved }) {
   );
 }
 
-function InvoiceModal({ mode, invoice, clients, onClose, onSaved }) {
+export function InvoiceModal({ mode, invoice, clients, onClose, onSaved }) {
   const { user } = useAuth();
   const [form, setForm] = useState({
     client_id: invoice?.client_id || '',
@@ -226,14 +224,45 @@ function InvoiceModal({ mode, invoice, clients, onClose, onSaved }) {
     status: invoice?.status || 'draft',
   });
   const [lines, setLines] = useState([]);
+  const [services, setServices] = useState([]);
   const [saving, setSaving] = useState(false);
   const [loadingLines, setLoadingLines] = useState(!!invoice);
+  const [otherEditors, setOtherEditors] = useState([]);
+
+  useEffect(() => {
+    if (!invoice?.id || !user?.email) return;
+    const channel = supabase.channel(`editing-invoice-${invoice.id}`);
+    channel.on('presence', { event: 'sync' }, () => {
+      const others = Object.values(channel.presenceState()).flat().filter(p => p.email !== user.email);
+      setOtherEditors(others);
+    }).subscribe(async (status) => {
+      if (status === 'SUBSCRIBED') {
+        await channel.track({ email: user.email, online_at: new Date().toISOString() });
+      }
+    });
+    return () => { supabase.removeChannel(channel); };
+  }, [invoice?.id, user?.email]);
+
+  useEffect(() => {
+    supabase.from('services').select('id, name, price').eq('is_active', true).order('name')
+      .then(({ data }) => setServices(data || []));
+  }, []);
 
   useEffect(() => {
     if (invoice) {
-      supabase.from('invoice_lines').select('*').eq('invoice_id', invoice.id).order('sort_order')
-        .then(({ data }) => {
-          setLines((data || []).map(l => ({ ...l, id: l.id || crypto.randomUUID() })));
+      supabase.from('invoice_lines').select('*').eq('invoice_id', invoice.id)
+        .then(({ data: linesData }) => {
+          if (linesData && linesData.length > 0) {
+            setLines(linesData.map(l => ({
+              id: l.id,
+              description: l.description || '',
+              rate: String(l.unit_price || 0),
+              amount: l.amount || (l.unit_price * l.quantity) || 0,
+              isCustom: true,
+            })));
+          } else {
+            setLines([emptyLine()]);
+          }
           setLoadingLines(false);
         });
     } else {
@@ -276,26 +305,25 @@ function InvoiceModal({ mode, invoice, clients, onClose, onSaved }) {
       const { data, error } = await supabase.from('invoices').insert(invoicePayload).select().single();
       if (error) { alert(error.message); setSaving(false); return; }
       invId = data.id;
+      const lineInserts = lines.filter(l => l.description).map(l => ({
+        invoice_id: invId,
+        description: l.description,
+        quantity: 1,
+        unit_price: parseFloat(l.rate) || 0,
+        amount: parseFloat(l.amount) || 0,
+      }));
+      if (lineInserts.length > 0) await supabase.from('invoice_lines').insert(lineInserts);
     } else {
       await supabase.from('invoices').update(invoicePayload).eq('id', invId);
       await supabase.from('invoice_lines').delete().eq('invoice_id', invId);
+      await supabase.from('invoice_lines').insert(lines.map(l => ({ invoice_id: invId, description: l.description, unit_price: parseFloat(l.rate) || 0, quantity: 1, amount: parseFloat(l.amount) || 0 })));
+      await supabase.from('invoices').update({ total, balance_due: total }).eq('id', invId);
     }
 
-    const lineInserts = lines.filter(l => l.description).map((l, i) => ({
-      invoice_id: invId,
-      description: l.description,
-      quantity: parseFloat(l.quantity) || 1,
-      rate: parseFloat(l.rate) || 0,
-      proration_factor: parseFloat(l.proration_factor) || 1,
-      amount: l.amount,
-      sort_order: i,
-    }));
-    if (lineInserts.length > 0) await supabase.from('invoice_lines').insert(lineInserts);
-
     await supabase.from('activity_log').insert({
-      client_id: form.client_id, user_id: user?.id,
-      action: mode === 'create' ? 'Invoice Created' : 'Invoice Updated',
-      details: mode === 'create' ? `New invoice created` : `Invoice updated`,
+      client_id: form.client_id, created_by: user?.id,
+      type: mode === 'create' ? 'Invoice Created' : 'Invoice Updated',
+      description: mode === 'create' ? `New invoice created` : `Invoice updated`,
     });
 
     setSaving(false);
@@ -329,6 +357,13 @@ function InvoiceModal({ mode, invoice, clients, onClose, onSaved }) {
             <button className="btn-icon" onClick={onClose}><span className="material-symbols-outlined">close</span></button>
           </div>
         </div>
+        {otherEditors.length > 0 && (
+          <div style={{ background: '#fff3cd', borderBottom: '1px solid #ffc107', padding: '10px 16px', display: 'flex', alignItems: 'center', gap: 8 }}>
+            <span className="material-symbols-outlined" style={{ color: '#f59e0b' }}>warning</span>
+            <span><strong>{otherEditors[0]?.email}</strong> is currently viewing this invoice. Saving may overwrite their changes.</span>
+          </div>
+        )}
+
         {isView ? (
           <div className="modal-body">
             {loadingLines ? <div className="loading-state"><div className="spinner" /></div> : (
@@ -338,16 +373,16 @@ function InvoiceModal({ mode, invoice, clients, onClose, onSaved }) {
                   <div className="info-item"><span className="info-label">Status</span><span className="info-value"><StatusBadge status={invoice.status} /></span></div>
                   <div className="info-item"><span className="info-label">Invoice Date</span><span className="info-value">{fmtDate(invoice.issue_date)}</span></div>
                   <div className="info-item"><span className="info-label">Due Date</span><span className="info-value">{fmtDate(invoice.due_date)}</span></div>
+                  <div className="info-item"><span className="info-label">QuickBooks</span><span className="info-value">{invoice.in_quickbooks ? '✅ Synced' : '⬜ Not synced'}</span></div>
                 </div>
                 <table className="line-items-table">
-                  <thead><tr><th>Description</th><th>Qty</th><th>Rate</th><th>Proration</th><th className="text-right">Amount</th></tr></thead>
+                  <thead><tr><th>Description</th><th>Rate</th><th>Proration</th><th className="text-right">Amount</th></tr></thead>
                   <tbody>
                     {lines.map(l => (
                       <tr key={l.id}>
                         <td>{l.description}</td>
-                        <td>{l.quantity}</td>
                         <td>{fmt(l.rate)}</td>
-                        <td>{parseFloat(l.proration_factor) !== 1 ? `${(parseFloat(l.proration_factor) * 100).toFixed(0)}%` : '100%'}</td>
+                        <td>{isNaN(parseFloat(l.proration_factor)) || !l.proration_factor ? '100%' : `${(parseFloat(l.proration_factor) * 100).toFixed(0)}%`}</td>
                         <td className="text-right">{fmt(l.amount)}</td>
                       </tr>
                     ))}
@@ -370,7 +405,7 @@ function InvoiceModal({ mode, invoice, clients, onClose, onSaved }) {
                   <label className="form-label">Client <span className="required">*</span></label>
                   <select className="form-select" value={form.client_id} onChange={e => setF('client_id', e.target.value)} required disabled={mode === 'edit'}>
                     <option value="">Select client…</option>
-                    {clients.filter(c => c.status === 'active').map(c => <option key={c.id} value={c.id}>{c.business_name}</option>)}
+                    {clients.map(c => <option key={c.id} value={c.id}>{c.business_name}</option>)}
                   </select>
                 </div>
                 <div className="form-group">
@@ -408,7 +443,6 @@ function InvoiceModal({ mode, invoice, clients, onClose, onSaved }) {
                   <thead>
                     <tr>
                       <th style={{ minWidth: 200 }}>Description</th>
-                      <th style={{ width: 70 }}>Qty</th>
                       <th style={{ width: 100 }}>Rate ($)</th>
                       <th style={{ width: 90 }}>Proration</th>
                       <th className="text-right" style={{ width: 100 }}>Amount</th>
@@ -418,8 +452,30 @@ function InvoiceModal({ mode, invoice, clients, onClose, onSaved }) {
                   <tbody>
                     {lines.map(l => (
                       <tr key={l.id}>
-                        <td><input className="line-item-input" value={l.description} onChange={e => updateLine(l.id, 'description', e.target.value)} placeholder="Service description…" /></td>
-                        <td><input type="number" className="line-item-input" value={l.quantity} onChange={e => updateLine(l.id, 'quantity', e.target.value)} min="0" step="0.01" /></td>
+                        <td>
+                          {l.isCustom ? (
+                            <input className="line-item-input" value={l.description} onChange={e => updateLine(l.id, 'description', e.target.value)} placeholder="Custom description…" style={{ width: '100%' }} />
+                          ) : (
+                            <select className="line-item-input" value={l.description} onChange={e => {
+                              const val = e.target.value;
+                              if (val === '__custom__') {
+                                setLines(prev => prev.map(li => li.id === l.id ? { ...li, isCustom: true, description: '' } : li));
+                              } else {
+                                const svc = services.find(s => s.name === val);
+                                setLines(prev => prev.map(li => {
+                                  if (li.id !== l.id) return li;
+                                  const updated = { ...li, description: val, rate: svc ? String(svc.price) : li.rate };
+                                  updated.amount = calcLineAmount(updated);
+                                  return updated;
+                                }));
+                              }
+                            }}>
+                              <option value="">Select service…</option>
+                              {services.map(s => <option key={s.id} value={s.name}>{s.name}</option>)}
+                              <option value="__custom__">Add custom…</option>
+                            </select>
+                          )}
+                        </td>
                         <td><input type="number" className="line-item-input" value={l.rate} onChange={e => updateLine(l.id, 'rate', e.target.value)} min="0" step="0.01" placeholder="0.00" /></td>
                         <td>
                           <select className="line-item-input" value={l.proration_factor} onChange={e => updateLine(l.id, 'proration_factor', e.target.value)}>
@@ -437,19 +493,19 @@ function InvoiceModal({ mode, invoice, clients, onClose, onSaved }) {
                   </tbody>
                   <tfoot>
                     <tr>
-                      <td colSpan={4} className="text-right">Subtotal</td>
+                      <td colSpan={3} className="text-right">Subtotal</td>
                       <td className="text-right">{fmt(subtotal)}</td>
                       <td />
                     </tr>
                     {lateFee > 0 && (
                       <tr>
-                        <td colSpan={4} className="text-right" style={{ color: 'var(--danger)' }}>Late Fee</td>
+                        <td colSpan={3} className="text-right" style={{ color: 'var(--danger)' }}>Late Fee</td>
                         <td className="text-right" style={{ color: 'var(--danger)' }}>{fmt(lateFee)}</td>
                         <td />
                       </tr>
                     )}
                     <tr style={{ borderTop: '2px solid var(--primary)' }}>
-                      <td colSpan={4} className="text-right" style={{ color: 'var(--primary)', fontSize: '1rem' }}>Total</td>
+                      <td colSpan={3} className="text-right" style={{ color: 'var(--primary)', fontSize: '1rem' }}>Total</td>
                       <td className="text-right" style={{ color: 'var(--primary)', fontSize: '1rem' }}>{fmt(total)}</td>
                       <td />
                     </tr>
@@ -493,7 +549,7 @@ export default function Invoices() {
     try {
       const [{ data: inv }, { data: cl }, { data: pay }] = await Promise.all([
         supabase.from('invoices').select('*, clients(business_name)').order('issue_date', { ascending: false }),
-        supabase.from('clients').select('id, business_name, status'),
+        supabase.from('clients').select('id, business_name').eq('status', 'Active').order('business_name'),
         supabase.from('payments').select('invoice_id, amount'),
       ]);
       setClients(cl || []);
@@ -531,8 +587,9 @@ export default function Invoices() {
   });
 
   const toggleQB = async (inv) => {
-    await supabase.from('invoices').update({ quickbooks_synced: !inv.quickbooks_synced }).eq('id', inv.id);
-    setInvoices(prev => prev.map(i => i.id === inv.id ? { ...i, quickbooks_synced: !inv.quickbooks_synced } : i));
+    const newVal = !inv.in_quickbooks;
+    await supabase.from('invoices').update({ in_quickbooks: newVal }).eq('id', inv.id);
+    setInvoices(prev => prev.map(i => i.id === inv.id ? { ...i, in_quickbooks: newVal } : i));
   };
 
   const handleDelete = async (inv) => {
@@ -595,7 +652,10 @@ export default function Invoices() {
                 <tr><td colSpan={9}><div className="empty-state"><span className="material-symbols-outlined">receipt_long</span><p>No invoices found</p></div></td></tr>
               ) : filtered.map(inv => (
                 <tr key={inv.id}>
-                  <td className="font-mono" style={{ fontSize: '0.82rem', color: 'var(--primary)', fontWeight: 700 }}>{inv.invoice_number}</td>
+                  <td className="font-mono" style={{ fontSize: '0.82rem', color: 'var(--primary)', fontWeight: 700 }}>
+                    {inv.invoice_number}
+                    {inv.in_quickbooks && <span style={{ fontSize: '0.6rem', background: '#22c55e', color: 'white', borderRadius: 3, padding: '1px 4px', marginLeft: 5, fontWeight: 700, verticalAlign: 'middle' }}>QB</span>}
+                  </td>
                   <td style={{ fontWeight: 500, color: 'var(--text)' }}>{inv.clientName}</td>
                   <td style={{ fontSize: '0.82rem', color: 'var(--text-muted)' }}>{fmtDate(inv.issue_date)}</td>
                   <td style={{ fontSize: '0.82rem', color: inv.due_date && inv.due_date < today() && inv.status !== 'paid' ? 'var(--danger)' : 'var(--text-muted)' }}>{fmtDate(inv.due_date)}</td>
@@ -607,9 +667,10 @@ export default function Invoices() {
                   <td className="checkbox-cell">
                     <input
                       type="checkbox"
-                      checked={!!inv.quickbooks_synced}
+                      checked={!!inv.in_quickbooks}
                       onChange={() => toggleQB(inv)}
                       title="QuickBooks synced"
+                      style={{ cursor: 'pointer', width: 16, height: 16 }}
                     />
                   </td>
                   <td>

@@ -29,7 +29,7 @@ export default function Dashboard() {
 
       const [clientsRes, invoicesRes, paymentsRes] = await Promise.all([
         supabase.from('clients').select('id, status'),
-        supabase.from('invoices').select('id, client_id, invoice_number, issue_date, due_date, total, status, clients(business_name)'),
+        supabase.from('invoices').select('id, client_id, invoice_number, issue_date, due_date, total, balance_due, status, clients(business_name)'),
         supabase.from('payments').select('id, invoice_id, amount, payment_date'),
       ]);
 
@@ -37,7 +37,7 @@ export default function Dashboard() {
       const invoices = invoicesRes.data || [];
       const payments = paymentsRes.data || [];
 
-      const activeClients = clients.filter(c => c.status === 'active').length;
+      const activeClients = clients.filter(c => (c.status || '').toLowerCase() === 'active').length;
 
       const billedMTD = invoices
         .filter(inv => inv.issue_date && inv.issue_date >= startOfMonth)
@@ -53,21 +53,21 @@ export default function Dashboard() {
       });
 
       const outstandingAR = invoices
-        .filter(inv => inv.status !== 'paid')
-        .reduce((sum, inv) => sum + Math.max(0, (inv.total || 0) - (paidByInvoice[inv.id] || 0)), 0);
+        .filter(inv => ['Unpaid', 'Partial'].includes(inv.status))
+        .reduce((sum, inv) => sum + (inv.balance_due || 0), 0);
 
       const sorted = [...invoices].sort((a, b) => (b.issue_date || '').localeCompare(a.issue_date || ''));
       setRecentInvoices(sorted.slice(0, 8).map(inv => ({
         ...inv,
-        balance: Math.max(0, (inv.total || 0) - (paidByInvoice[inv.id] || 0)),
+        balance: inv.balance_due || 0,
         clientName: inv.clients?.business_name || '—',
       })));
 
       const overdue = invoices
-        .filter(inv => inv.due_date && inv.due_date < today && inv.status !== 'paid')
+        .filter(inv => inv.due_date && inv.due_date < today && !['Paid', 'paid'].includes(inv.status) && (inv.balance_due || 0) > 0)
         .map(inv => ({
           ...inv,
-          balance: Math.max(0, (inv.total || 0) - (paidByInvoice[inv.id] || 0)),
+          balance: inv.balance_due || 0,
           daysOverdue: Math.floor((new Date(today) - new Date(inv.due_date)) / 86400000),
           clientName: inv.clients?.business_name || '—',
         }))

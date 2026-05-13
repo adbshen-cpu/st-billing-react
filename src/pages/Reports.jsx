@@ -14,40 +14,42 @@ export default function Reports() {
   const load = async () => {
     setLoading(true);
     try {
-      const [{ data: invoices }, { data: payments }, { data: clients }, { data: services }] = await Promise.all([
-        supabase.from('invoices').select('id, date, total, status, invoice_lines(amount, description)'),
-        supabase.from('payments').select('id, amount, date, invoice_id'),
-        supabase.from('clients').select('id, status, created_at'),
-        supabase.from('client_services').select('id, service_id, price, services(name, category)'),
+      const yearStart = `${year}-01-01`;
+      const yearEnd = `${year}-12-31`;
+
+      const [{ data: invoiceData }, { data: paymentData }, { count: activeCount }, { data: newClientData }, { data: services }] = await Promise.all([
+        supabase.from('invoices').select('total, issue_date, balance_due').gte('issue_date', yearStart).lte('issue_date', yearEnd),
+        supabase.from('payments').select('amount, payment_date').gte('payment_date', yearStart).lte('payment_date', yearEnd),
+        supabase.from('clients').select('*', { count: 'exact', head: true }).eq('status', 'Active'),
+        supabase.from('clients').select('created_at').gte('created_at', yearStart).lte('created_at', yearEnd),
+        supabase.from('client_services').select('id, service_id, custom_price, services(name, category, price)'),
       ]);
 
       const yearStr = String(year);
-      const yearInvoices = (invoices || []).filter(i => i.date && i.date.startsWith(yearStr));
-      const yearPayments = (payments || []).filter(p => p.date && p.date.startsWith(yearStr));
+      const totalBilled = (invoiceData || []).reduce((s, i) => s + parseFloat(i.total || 0), 0);
+      const totalCollected = (paymentData || []).reduce((s, p) => s + parseFloat(p.amount || 0), 0);
 
       const monthly = MONTHS.map((month, idx) => {
         const mStr = `${yearStr}-${String(idx + 1).padStart(2, '0')}`;
-        const billed = yearInvoices.filter(i => i.date.startsWith(mStr)).reduce((s, i) => s + (i.total || 0), 0);
-        const collected = yearPayments.filter(p => p.date.startsWith(mStr)).reduce((s, p) => s + (p.amount || 0), 0);
+        const billed = (invoiceData || []).filter(i => i.issue_date && i.issue_date.startsWith(mStr)).reduce((s, i) => s + parseFloat(i.total || 0), 0);
+        const collected =
+          (paymentData || []).filter(p => p.payment_date && p.payment_date.startsWith(mStr)).reduce((s, p) => s + parseFloat(p.amount || 0), 0);
         return { month, billed, collected };
       });
 
       const catMap = {};
       (services || []).forEach(cs => {
         const cat = cs.services?.category || 'Other';
-        catMap[cat] = (catMap[cat] || 0) + (cs.price || cs.services?.default_price || 0);
+        catMap[cat] = (catMap[cat] || 0) + parseFloat(cs.custom_price ?? cs.services?.price ?? 0);
       });
       const categories = Object.entries(catMap).sort((a, b) => b[1] - a[1]).slice(0, 6);
 
-      const ytdBilled = yearInvoices.reduce((s, i) => s + (i.total || 0), 0);
-      const ytdCollected = yearPayments.reduce((s, p) => s + (p.amount || 0), 0);
-      const newClients = (clients || []).filter(c => c.created_at && c.created_at.startsWith(yearStr)).length;
-      const activeClients = (clients || []).filter(c => c.status === 'active').length;
-      const totalInvoices = yearInvoices.length;
-      const avgInvoice = totalInvoices ? ytdBilled / totalInvoices : 0;
-      const collectionRate = ytdBilled > 0 ? (ytdCollected / ytdBilled) * 100 : 0;
+      const totalInvoices = (invoiceData || []).length;
+      const avgInvoice = totalInvoices ? totalBilled / totalInvoices : 0;
+      const collectionRate = totalBilled > 0 ? (totalCollected / totalBilled) * 100 : 0;
+      const newClients = (newClientData || []).length;
 
-      setData({ monthly, categories, ytdBilled, ytdCollected, newClients, activeClients, totalInvoices, avgInvoice, collectionRate });
+      setData({ monthly, categories, ytdBilled: totalBilled, ytdCollected: totalCollected, newClients, activeClients: activeCount || 0, totalInvoices, avgInvoice, collectionRate });
     } catch (err) {
       console.error(err);
     } finally {

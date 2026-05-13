@@ -1,7 +1,8 @@
-import { useState, useEffect, useCallback } from 'react';
+import { useState, useEffect, useCallback, useRef } from 'react';
 import { useParams, useNavigate } from 'react-router-dom';
 import { supabase } from '../lib/supabase';
 import { useAuth } from '../contexts/AuthContext';
+import { InvoiceModal } from './Invoices';
 
 const fmt = (n) => new Intl.NumberFormat('en-US', { style: 'currency', currency: 'USD' }).format(n || 0);
 const fmtDate = (d) => d ? new Date(d).toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' }) : '—';
@@ -49,10 +50,10 @@ const downloadCSV = (content, filename) => {
 
 /* ===== CREDENTIALS TAB ===== */
 const emptyCredential = () => ({
-  platform: '', username: '', password_encrypted: '', pin: '',
-  security_q1: '', security_a1: '',
-  security_q2: '', security_a2: '',
-  security_q3: '', security_a3: '',
+  item_name: '', user_id: '', login_url: '', password: '', pin: '',
+  security_question_1: '', security_answer_1: '',
+  security_question_2: '', security_answer_2: '',
+  security_question_3: '', security_answer_3: '',
   notes: '',
 });
 
@@ -60,13 +61,27 @@ function CredentialsTab({ clientId }) {
   const [creds, setCreds] = useState([]);
   const [loading, setLoading] = useState(true);
   const [showPass, setShowPass] = useState({});
+  const [showPin, setShowPin] = useState({});
   const [modal, setModal] = useState({ open: false, mode: 'add', data: null });
   const [form, setForm] = useState(emptyCredential());
   const [saving, setSaving] = useState(false);
   const [showFormPass, setShowFormPass] = useState(false);
+  const [copied, setCopied] = useState(null);
+
+  const copyToClipboard = async (text, label) => {
+    await navigator.clipboard.writeText(text);
+    setCopied(label);
+    setTimeout(() => setCopied(null), 1500);
+  };
+
+  const CopyBtn = ({ text, label }) => (
+    <button onClick={() => copyToClipboard(text, label)} style={{ background: 'none', border: 'none', cursor: 'pointer', color: copied === label ? 'var(--success)' : 'var(--text-muted)', padding: 0, lineHeight: 1, flexShrink: 0 }}>
+      <span className="material-symbols-outlined" style={{ fontSize: 15 }}>{copied === label ? 'check_circle' : 'content_copy'}</span>
+    </button>
+  );
 
   const load = useCallback(async () => {
-    const { data } = await supabase.from('client_credentials').select('*').eq('client_id', clientId).order('platform');
+    const { data } = await supabase.from('client_credentials').select('*').eq('client_id', clientId).order('created_at', { ascending: false });
     setCreds(data || []);
     setLoading(false);
   }, [clientId]);
@@ -75,15 +90,31 @@ function CredentialsTab({ clientId }) {
 
   const openAdd = () => { setForm(emptyCredential()); setModal({ open: true, mode: 'add', data: null }); };
   const openEdit = (c) => { setForm({ ...c }); setModal({ open: true, mode: 'edit', data: c }); };
+  const openView = (c) => { setForm({ ...c }); setModal({ open: true, mode: 'view', data: c }); };
   const closeModal = () => { setModal({ open: false, mode: 'add', data: null }); setShowFormPass(false); };
   const setF = (k, v) => setForm(f => ({ ...f, [k]: v }));
 
   const handleSave = async (e) => {
     e.preventDefault();
-    if (!form.platform.trim()) return;
+    if (modal.mode === 'view') return;
+    if (!form.item_name.trim()) return;
     setSaving(true);
-    const payload = { ...form, client_id: clientId };
-    delete payload.id;
+    const payload = {
+      client_id: clientId,
+      item_name: form.item_name,
+      user_id: form.user_id,
+      password: form.password,
+      pin: form.pin,
+      login_url: form.login_url,
+      security_question_1: form.security_question_1,
+      security_answer_1: form.security_answer_1,
+      security_question_2: form.security_question_2,
+      security_answer_2: form.security_answer_2,
+      security_question_3: form.security_question_3,
+      security_answer_3: form.security_answer_3,
+      notes: form.notes,
+    };
+
     if (modal.mode === 'add') await supabase.from('client_credentials').insert(payload);
     else await supabase.from('client_credentials').update(payload).eq('id', modal.data.id);
     setSaving(false); closeModal(); load();
@@ -116,34 +147,56 @@ function CredentialsTab({ clientId }) {
       ) : creds.map(c => (
         <div className="credential-card" key={c.id}>
           <div className="credential-card-header">
-            <div className="credential-platform">{c.platform}</div>
+            <div className="credential-platform">{c.item_name}</div>
             <div className="btn-group">
-              <button className="btn-icon" onClick={() => openEdit(c)}><span className="material-symbols-outlined">edit</span></button>
-              <button className="btn-icon danger" onClick={() => handleDelete(c.id)}><span className="material-symbols-outlined">delete</span></button>
+              <button className="btn-icon" title="View" onClick={() => openView(c)}><span className="material-symbols-outlined">visibility</span></button>
+              <button className="btn-icon" title="Edit" onClick={() => openEdit(c)}><span className="material-symbols-outlined">edit</span></button>
+              <button className="btn-icon danger" title="Delete" onClick={() => handleDelete(c.id)}><span className="material-symbols-outlined">delete</span></button>
             </div>
           </div>
           <div className="credential-grid">
-            {c.username && (
+            {c.user_id && (
               <div className="credential-field">
-                <span className="credential-field-label">Username</span>
-                <span className="credential-field-value">{c.username}</span>
-              </div>
-            )}
-            {c.password_encrypted && (
-              <div className="credential-field">
-                <span className="credential-field-label">Password</span>
+                <span className="credential-field-label">User ID</span>
                 <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
-                  <span className="credential-field-value">{showPass[c.id] ? c.password_encrypted : '••••••••'}</span>
-                  <button className="btn-icon" style={{ width: 24, height: 24 }} onClick={() => togglePass(c.id)}>
-                    <span className="material-symbols-outlined" style={{ fontSize: 15 }}>{showPass[c.id] ? 'visibility_off' : 'visibility'}</span>
-                  </button>
+                  <span className="credential-field-value">{c.user_id}</span>
+                  <CopyBtn text={c.user_id} label={`${c.id}-userid`} />
                 </div>
               </div>
             )}
-            {c.pin && <div className="credential-field"><span className="credential-field-label">PIN</span><span className="credential-field-value">{showPass[c.id] ? c.pin : '••••'}</span></div>}
-            {c.security_q1 && <div className="credential-field" style={{ gridColumn: 'span 2' }}><span className="credential-field-label">Security Q1</span><span className="credential-field-value" style={{ fontFamily: 'inherit' }}>{c.security_q1} → {showPass[c.id] ? c.security_a1 : '••••'}</span></div>}
-            {c.security_q2 && <div className="credential-field" style={{ gridColumn: 'span 2' }}><span className="credential-field-label">Security Q2</span><span className="credential-field-value" style={{ fontFamily: 'inherit' }}>{c.security_q2} → {showPass[c.id] ? c.security_a2 : '••••'}</span></div>}
-            {c.security_q3 && <div className="credential-field" style={{ gridColumn: 'span 2' }}><span className="credential-field-label">Security Q3</span><span className="credential-field-value" style={{ fontFamily: 'inherit' }}>{c.security_q3} → {showPass[c.id] ? c.security_a3 : '••••'}</span></div>}
+            {c.login_url && (
+              <div className="credential-field">
+                <span className="credential-field-label">Login URL</span>
+                <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+                  <a href={c.login_url.startsWith('http') ? c.login_url : `https://${c.login_url}`} target="_blank" rel="noopener noreferrer" className="credential-field-value" style={{ color: 'var(--primary)', textDecoration: 'none' }}>{c.login_url}</a>
+                  <CopyBtn text={c.login_url} label={`${c.id}-login_url`} />
+                </div>
+              </div>
+            )}
+            {c.password && (
+              <div className="credential-field">
+                <span className="credential-field-label">Password</span>
+                <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+                  <span className="credential-field-value">{showPass[c.id] ? c.password : '••••••••'}</span>
+                  <button className="btn-icon" style={{ width: 24, height: 24 }} onClick={() => togglePass(c.id)}>
+                    <span className="material-symbols-outlined" style={{ fontSize: 15 }}>{showPass[c.id] ? 'visibility_off' : 'visibility'}</span>
+                  </button>
+                  <CopyBtn text={c.password} label={`${c.id}-password`} />
+                </div>
+              </div>
+            )}
+            {c.pin && (
+              <div className="credential-field">
+                <span className="credential-field-label">PIN</span>
+                <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+                  <span className="credential-field-value">{showPin[c.id] ? c.pin : '••••'}</span>
+                  <button className="btn-icon" style={{ width: 24, height: 24 }} onClick={() => setShowPin(p => ({ ...p, [c.id]: !p[c.id] }))}>
+                    <span className="material-symbols-outlined" style={{ fontSize: 15 }}>{showPin[c.id] ? 'visibility_off' : 'visibility'}</span>
+                  </button>
+                  <CopyBtn text={c.pin} label={`${c.id}-pin`} />
+                </div>
+              </div>
+            )}
             {c.notes && <div className="credential-field" style={{ gridColumn: 'span 2' }}><span className="credential-field-label">Notes</span><span className="credential-field-value" style={{ fontFamily: 'inherit' }}>{c.notes}</span></div>}
           </div>
         </div>
@@ -151,30 +204,38 @@ function CredentialsTab({ clientId }) {
 
       <Modal
         isOpen={modal.open}
-        title={modal.mode === 'add' ? 'Add Credential' : 'Edit Credential'}
+        title={modal.mode === 'add' ? 'Add Credential' : modal.mode === 'edit' ? 'Edit Credential' : 'View Credential'}
         size="modal-lg"
         onClose={closeModal}
         footer={
-          <>
-            <button className="btn btn-secondary" onClick={closeModal}>Cancel</button>
-            <button className="btn btn-primary" onClick={handleSave} disabled={saving}>{saving ? 'Saving…' : 'Save'}</button>
-          </>
+          modal.mode === 'view' ? (
+            <button className="btn btn-secondary" onClick={closeModal}>Close</button>
+          ) : (
+            <>
+              <button className="btn btn-secondary" onClick={closeModal}>Cancel</button>
+              <button className="btn btn-primary" onClick={handleSave} disabled={saving}>{saving ? 'Saving…' : 'Save'}</button>
+            </>
+          )
         }
       >
-        <form onSubmit={handleSave}>
+        <form onSubmit={handleSave} autoComplete="off">
           <div className="form-grid">
             <div className="form-group form-col-span-2">
-              <label className="form-label">Platform / Service <span className="required">*</span></label>
-              <input className="form-input" value={form.platform} onChange={e => setF('platform', e.target.value)} placeholder="e.g. IRS.gov, State Portal, QuickBooks…" required />
+              <label className="form-label">Item Name <span className="required">*</span></label>
+              <input className="form-input" value={form.item_name} onChange={e => setF('item_name', e.target.value)} placeholder="e.g. IRS.gov, State Portal, QuickBooks…" required readOnly={modal.mode === 'view'} autoComplete="off" />
             </div>
             <div className="form-group">
-              <label className="form-label">Username / Email</label>
-              <input className="form-input" value={form.username} onChange={e => setF('username', e.target.value)} />
+              <label className="form-label">User ID</label>
+              <input className="form-input" value={form.user_id} onChange={e => setF('user_id', e.target.value)} readOnly={modal.mode === 'view'} autoComplete="off" />
+            </div>
+            <div className="form-group">
+              <label className="form-label">Login URL</label>
+              <input className="form-input" value={form.login_url || ''} onChange={e => setF('login_url', e.target.value)} placeholder="https://…" readOnly={modal.mode === 'view'} autoComplete="off" />
             </div>
             <div className="form-group">
               <label className="form-label">Password</label>
               <div className="password-input-wrapper">
-                <input type={showFormPass ? 'text' : 'password'} className="form-input" value={form.password_encrypted} onChange={e => setF('password_encrypted', e.target.value)} />
+                <input type={showFormPass ? 'text' : 'password'} className="form-input" value={form.password} onChange={e => setF('password', e.target.value)} readOnly={modal.mode === 'view'} autoComplete="new-password" />
                 <button type="button" className="password-toggle-btn" onClick={() => setShowFormPass(v => !v)}>
                   <span className="material-symbols-outlined">{showFormPass ? 'visibility_off' : 'visibility'}</span>
                 </button>
@@ -182,27 +243,27 @@ function CredentialsTab({ clientId }) {
             </div>
             <div className="form-group">
               <label className="form-label">PIN</label>
-              <input className="form-input" value={form.pin} onChange={e => setF('pin', e.target.value)} placeholder="4-digit PIN" maxLength={10} />
+              <input className="form-input" value={form.pin} onChange={e => setF('pin', e.target.value)} placeholder="4-digit PIN" maxLength={10} readOnly={modal.mode === 'view'} autoComplete="new-password" />
             </div>
           </div>
           <div style={{ marginTop: 16, padding: 14, background: '#f7f9fc', borderRadius: 'var(--radius-sm)', marginBottom: 12 }}>
             <div style={{ fontSize: '0.8rem', fontWeight: 600, color: 'var(--text-secondary)', marginBottom: 10, textTransform: 'uppercase', letterSpacing: '0.06em' }}>Security Questions</div>
-            {[['security_q1','security_a1','1'],['security_q2','security_a2','2'],['security_q3','security_a3','3']].map(([qk, ak, n]) => (
+            {[['security_question_1','security_answer_1','1'],['security_question_2','security_answer_2','2'],['security_question_3','security_answer_3','3']].map(([qk, ak, n]) => (
               <div className="form-grid" style={{ marginBottom: 8 }} key={qk}>
                 <div className="form-group">
                   <label className="form-label">Question {n}</label>
-                  <input className="form-input" value={form[qk]} onChange={e => setF(qk, e.target.value)} placeholder={`Security question ${n}`} />
+                  <input className="form-input" value={form[qk]} onChange={e => setF(qk, e.target.value)} placeholder={`Security question ${n}`} readOnly={modal.mode === 'view'} autoComplete="off" />
                 </div>
                 <div className="form-group">
                   <label className="form-label">Answer {n}</label>
-                  <input className="form-input" value={form[ak]} onChange={e => setF(ak, e.target.value)} placeholder="Answer" />
+                  <input className="form-input" value={form[ak]} onChange={e => setF(ak, e.target.value)} placeholder="Answer" readOnly={modal.mode === 'view'} autoComplete="off" />
                 </div>
               </div>
             ))}
           </div>
           <div className="form-group">
             <label className="form-label">Notes</label>
-            <textarea className="form-textarea" rows={2} value={form.notes} onChange={e => setF('notes', e.target.value)} />
+            <textarea className="form-textarea" rows={2} value={form.notes} onChange={e => setF('notes', e.target.value)} readOnly={modal.mode === 'view'} autoComplete="off" />
           </div>
         </form>
       </Modal>
@@ -224,7 +285,7 @@ function InlinePayModal({ invoice, onClose, onSaved, user }) {
     await supabase.from('payments').insert({ invoice_id: invoice.id, client_id: invoice.client_id, amount: amt, payment_date: form.date, method: form.method, reference_num: form.reference || null, notes: form.notes || null });
     const newStatus = amt >= balance ? 'paid' : 'partial';
     await supabase.from('invoices').update({ status: newStatus }).eq('id', invoice.id);
-    await supabase.from('activity_log').insert({ client_id: invoice.client_id, user_id: user?.id, action: 'Payment Recorded', details: `Payment of ${fmt(amt)} on invoice ${invoice.invoice_number}` });
+    await supabase.from('activity_log').insert({ client_id: invoice.client_id, created_by: user?.id, type: 'Payment Recorded', description: `Payment of ${fmt(amt)} on invoice ${invoice.invoice_number}` });
     setSaving(false); onSaved(); onClose();
   };
   return (
@@ -251,6 +312,314 @@ function InlinePayModal({ invoice, onClose, onSaved, user }) {
   );
 }
 
+/* ===== INTAKE TAB ===== */
+const FIRM = { name: 'S&T Tax and Advisory LLC', email: 'hello.sttax@gmail.com', phone: '929-367-8799', address: 'Mineola, NY' };
+
+const maskSSN = (ssn) => {
+  if (!ssn) return '—';
+  const d = ssn.replace(/\D/g, '');
+  return d.length >= 9 ? `XXX-XX-${d.slice(-4)}` : 'XXX-XX-XXXX';
+};
+
+function IntakeTab({ client, clientId, user, onSaved }) {
+  const [form, setForm] = useState({
+    is_new_entity: client?.is_new_entity || false,
+    proposed_name_1: client?.proposed_name_1 || '',
+    proposed_name_2: client?.proposed_name_2 || '',
+    proposed_name_3: client?.proposed_name_3 || '',
+    business_address: client?.business_address || '',
+    ein: client?.ein || '',
+    business_type: client?.business_type || '',
+    entity_type: client?.entity_type || '',
+    owner_name: client?.owner_name || '',
+    owner_ssn: client?.owner_ssn || '',
+    owner_dob: client?.owner_dob || '',
+    owner_address: client?.owner_address || '',
+    primary_phone: client?.primary_phone || '',
+    primary_email: client?.primary_email || '',
+    intake_notes: client?.intake_notes || '',
+  });
+  const [saving, setSaving] = useState(false);
+  const [showSSN, setShowSSN] = useState(false);
+  const setF = (k, v) => setForm(f => ({ ...f, [k]: v }));
+
+  const handleSave = async () => {
+    setSaving(true);
+    const payload = { ...form, owner_dob: form.owner_dob || null };
+    const { error } = await supabase.from('clients').update(payload).eq('id', clientId);
+    if (error) { alert(error.message); setSaving(false); return; }
+    await supabase.from('activity_log').insert({ client_id: clientId, created_by: user?.id, type: 'Intake Sheet Updated', description: 'Intake information saved' });
+    setSaving(false);
+    onSaved();
+  };
+
+  const downloadPDF = () => {
+    if (!window.jspdf) { alert('PDF library not loaded. Check your internet connection.'); return; }
+    const { jsPDF } = window.jspdf;
+    const doc = new jsPDF();
+    const primary = [13, 78, 166];
+    const lightBlue = [240, 245, 255];
+    const gray = [100, 100, 100];
+    const black = [0, 0, 0];
+
+    doc.setFillColor(...primary);
+    doc.rect(0, 0, 210, 40, 'F');
+    doc.setTextColor(255, 255, 255);
+    doc.setFontSize(16); doc.setFont('helvetica', 'bold');
+    doc.text(FIRM.name, 14, 14);
+    doc.setFontSize(8); doc.setFont('helvetica', 'normal');
+    doc.text(`${FIRM.email}  •  ${FIRM.phone}  •  ${FIRM.address}`, 14, 22);
+    doc.setFontSize(20); doc.setFont('helvetica', 'bold');
+    doc.text('CLIENT INTAKE SHEET', 14, 34);
+
+    doc.setTextColor(...gray);
+    doc.setFontSize(8); doc.setFont('helvetica', 'normal');
+    doc.text(`Date Generated: ${new Date().toLocaleDateString('en-US', { month: 'long', day: 'numeric', year: 'numeric' })}`, 14, 48);
+
+    let y = 58;
+    const checkPage = () => { if (y > 268) { doc.addPage(); y = 20; } };
+
+    const section = (title) => {
+      checkPage();
+      doc.setFillColor(...lightBlue);
+      doc.rect(14, y - 5, 182, 9, 'F');
+      doc.setFontSize(9); doc.setFont('helvetica', 'bold');
+      doc.setTextColor(...primary);
+      doc.text(title, 16, y + 1);
+      y += 10;
+    };
+
+    const row = (label, value) => {
+      checkPage();
+      doc.setFontSize(8); doc.setFont('helvetica', 'bold'); doc.setTextColor(...gray);
+      doc.text(`${label}:`, 16, y);
+      doc.setFont('helvetica', 'normal'); doc.setTextColor(...black);
+      const val = value || '—';
+      const wrapped = doc.splitTextToSize(val, 110);
+      doc.text(wrapped, 82, y);
+      y += Math.max(7, wrapped.length * 5);
+    };
+
+    section('SECTION 1 — ENTITY INFORMATION');
+    row('New Entity Formation', form.is_new_entity ? 'Yes' : 'No');
+    if (form.is_new_entity) {
+      row('Proposed Name 1 (1st choice)', form.proposed_name_1);
+      row('Proposed Name 2 (2nd choice)', form.proposed_name_2);
+      row('Proposed Name 3 (3rd choice)', form.proposed_name_3);
+    } else {
+      row('Business Name', client?.business_name);
+    }
+    row('Business / Company Address', form.business_address);
+    row('EIN', form.ein);
+    row('Type of Business / Industry', form.business_type);
+    row('Entity Type', form.entity_type);
+
+    y += 4;
+    section('SECTION 2 — OWNER INFORMATION');
+    row('Owner Full Name', form.owner_name);
+    row('Owner SSN', maskSSN(form.owner_ssn));
+    row('Date of Birth', form.owner_dob ? new Date(form.owner_dob + 'T00:00:00').toLocaleDateString('en-US') : '');
+    row('Owner Home Address', form.owner_address);
+    row('Contact Phone', form.primary_phone);
+    row('Main Email Address', form.primary_email);
+
+    if (form.intake_notes) {
+      y += 4;
+      section('SECTION 3 — ADDITIONAL NOTES');
+      doc.setFontSize(8); doc.setFont('helvetica', 'normal'); doc.setTextColor(...black);
+      const noteLines = doc.splitTextToSize(form.intake_notes, 178);
+      noteLines.forEach(line => { checkPage(); doc.text(line, 16, y); y += 5.5; });
+    }
+
+    doc.setFontSize(7); doc.setTextColor(...gray); doc.setFont('helvetica', 'italic');
+    doc.text(`${FIRM.name} — Confidential Client Document`, 105, 290, { align: 'center' });
+
+    const safeName = (client?.business_name || form.proposed_name_1 || 'client').replace(/[^a-z0-9]/gi, '_');
+    doc.save(`${safeName}_intake.pdf`);
+  };
+
+  const downloadExcel = () => {
+    const rows = [
+      ['CLIENT INTAKE SHEET — ' + FIRM.name],
+      ['Generated:', new Date().toLocaleDateString()],
+      [],
+      ['SECTION 1 — ENTITY INFORMATION'],
+      ['New Entity Formation', form.is_new_entity ? 'Yes' : 'No'],
+      ...(form.is_new_entity
+        ? [['Proposed Name 1 (1st choice)', form.proposed_name_1], ['Proposed Name 2 (2nd choice)', form.proposed_name_2], ['Proposed Name 3 (3rd choice)', form.proposed_name_3]]
+        : [['Business Name', client?.business_name || '']]),
+      ['Business / Company Address', form.business_address],
+      ['EIN', form.ein],
+      ['Type of Business / Industry', form.business_type],
+      ['Entity Type', form.entity_type],
+      [],
+      ['SECTION 2 — OWNER INFORMATION'],
+      ['Owner Full Name', form.owner_name],
+      ['Owner SSN (masked)', maskSSN(form.owner_ssn)],
+      ['Date of Birth', form.owner_dob],
+      ['Owner Home Address', form.owner_address],
+      ['Contact Phone', form.primary_phone],
+      ['Main Email Address', form.primary_email],
+      [],
+      ['SECTION 3 — ADDITIONAL NOTES'],
+      ['Notes', form.intake_notes],
+    ];
+    const safeName = (client?.business_name || 'client').replace(/[^a-z0-9]/gi, '_');
+    downloadCSV(toCSV(rows), `${safeName}_intake.csv`);
+  };
+
+  return (
+    <div>
+      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 20 }}>
+        <div>
+          <h4 style={{ margin: 0, fontSize: '1rem', fontWeight: 600, color: 'var(--text)' }}>Client Intake Sheet</h4>
+          <p style={{ margin: '4px 0 0', fontSize: '0.8rem', color: 'var(--text-muted)' }}>Fill out and save — then generate PDF or Excel for client records.</p>
+        </div>
+        <div style={{ display: 'flex', gap: 8 }}>
+          <button className="btn btn-secondary btn-sm" onClick={downloadExcel}>
+            <span className="material-symbols-outlined">table_view</span> Excel
+          </button>
+          <button className="btn btn-secondary btn-sm" onClick={downloadPDF}>
+            <span className="material-symbols-outlined">picture_as_pdf</span> PDF
+          </button>
+          <button className="btn btn-primary btn-sm" onClick={handleSave} disabled={saving}>
+            <span className="material-symbols-outlined">save</span> {saving ? 'Saving…' : 'Save'}
+          </button>
+        </div>
+      </div>
+
+      {/* SECTION 1 */}
+      <div className="card" style={{ marginBottom: 20 }}>
+        <div className="card-header"><h3>Section 1 — Entity Information</h3></div>
+        <div className="card-body">
+          <div className="form-grid">
+            <div className="form-group" style={{ gridColumn: 'span 2' }}>
+              <label className="form-label">Is this a new entity formation?</label>
+              <div style={{ display: 'flex', gap: 8, marginTop: 6 }}>
+                <button
+                  type="button"
+                  className={`btn btn-sm ${form.is_new_entity ? 'btn-primary' : 'btn-secondary'}`}
+                  onClick={() => setF('is_new_entity', true)}
+                  style={{ minWidth: 60 }}
+                >Yes</button>
+                <button
+                  type="button"
+                  className={`btn btn-sm ${!form.is_new_entity ? 'btn-primary' : 'btn-secondary'}`}
+                  onClick={() => setF('is_new_entity', false)}
+                  style={{ minWidth: 60 }}
+                >No</button>
+              </div>
+            </div>
+
+            {form.is_new_entity ? (
+              <>
+                <div className="form-group" style={{ gridColumn: 'span 2' }}>
+                  <label className="form-label">Proposed Business Name — 1st Choice</label>
+                  <input className="form-input" value={form.proposed_name_1} onChange={e => setF('proposed_name_1', e.target.value)} placeholder="First preference" />
+                </div>
+                <div className="form-group">
+                  <label className="form-label">Proposed Business Name — 2nd Choice</label>
+                  <input className="form-input" value={form.proposed_name_2} onChange={e => setF('proposed_name_2', e.target.value)} placeholder="Second preference" />
+                </div>
+                <div className="form-group">
+                  <label className="form-label">Proposed Business Name — 3rd Choice</label>
+                  <input className="form-input" value={form.proposed_name_3} onChange={e => setF('proposed_name_3', e.target.value)} placeholder="Third preference" />
+                </div>
+              </>
+            ) : (
+              <div className="form-group" style={{ gridColumn: 'span 2' }}>
+                <label className="form-label">Business Name</label>
+                <input className="form-input" value={client?.business_name || ''} readOnly style={{ background: 'var(--bg-secondary)', color: 'var(--text-muted)', cursor: 'default' }} />
+              </div>
+            )}
+
+            <div className="form-group" style={{ gridColumn: 'span 2' }}>
+              <label className="form-label">Business / Company Address</label>
+              <input className="form-input" value={form.business_address} onChange={e => setF('business_address', e.target.value)} placeholder="Street, City, State, ZIP" />
+            </div>
+            <div className="form-group">
+              <label className="form-label">EIN</label>
+              <input className="form-input" value={form.ein} onChange={e => setF('ein', e.target.value)} placeholder="XX-XXXXXXX" />
+            </div>
+            <div className="form-group">
+              <label className="form-label">Type of Business / Industry</label>
+              <input className="form-input" value={form.business_type} onChange={e => setF('business_type', e.target.value)} placeholder="e.g. Retail, Consulting, Healthcare…" />
+            </div>
+            <div className="form-group">
+              <label className="form-label">Entity Type</label>
+              <select className="form-select" value={form.entity_type} onChange={e => setF('entity_type', e.target.value)}>
+                <option value="">— Select —</option>
+                {['Sole Proprietorship','Partnership','S-Corp','C-Corp','LLC','Disregarded Entity'].map(o => <option key={o}>{o}</option>)}
+              </select>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      {/* SECTION 2 */}
+      <div className="card" style={{ marginBottom: 20 }}>
+        <div className="card-header"><h3>Section 2 — Owner Information</h3></div>
+        <div className="card-body">
+          <div className="form-grid">
+            <div className="form-group">
+              <label className="form-label">Owner Full Name</label>
+              <input className="form-input" autoComplete="off" value={form.owner_name} onChange={e => setF('owner_name', e.target.value)} placeholder="First and Last Name" />
+            </div>
+            <div className="form-group">
+              <label className="form-label">Owner SSN</label>
+              <div className="password-input-wrapper">
+                <input
+                  type={showSSN ? 'text' : 'password'}
+                  className="form-input"
+                  autoComplete="new-password"
+                  name="intake-ssn"
+                  value={form.owner_ssn}
+                  onChange={e => setF('owner_ssn', e.target.value)}
+                  placeholder="XXX-XX-XXXX"
+                />
+                <button type="button" className="password-toggle-btn" onClick={() => setShowSSN(v => !v)}>
+                  <span className="material-symbols-outlined">{showSSN ? 'visibility_off' : 'visibility'}</span>
+                </button>
+              </div>
+            </div>
+            <div className="form-group">
+              <label className="form-label">Date of Birth</label>
+              <input type="date" className="form-input" autoComplete="off" value={form.owner_dob} onChange={e => setF('owner_dob', e.target.value)} />
+            </div>
+            <div className="form-group">
+              <label className="form-label">Owner Home Address</label>
+              <input className="form-input" autoComplete="off" value={form.owner_address} onChange={e => setF('owner_address', e.target.value)} placeholder="Street, City, State, ZIP" />
+            </div>
+            <div className="form-group">
+              <label className="form-label">Contact Phone</label>
+              <input className="form-input" autoComplete="off" value={form.primary_phone} onChange={e => setF('primary_phone', e.target.value)} placeholder="(XXX) XXX-XXXX" />
+            </div>
+            <div className="form-group">
+              <label className="form-label">Main Email Address</label>
+              <input type="email" className="form-input" autoComplete="off" value={form.primary_email} onChange={e => setF('primary_email', e.target.value)} placeholder="email@example.com" />
+            </div>
+          </div>
+        </div>
+      </div>
+
+      {/* SECTION 3 */}
+      <div className="card">
+        <div className="card-header"><h3>Section 3 — Additional Notes</h3></div>
+        <div className="card-body">
+          <textarea
+            className="form-textarea"
+            rows={6}
+            value={form.intake_notes}
+            onChange={e => setF('intake_notes', e.target.value)}
+            placeholder="Any additional notes, special circumstances, referral source, or instructions…"
+            style={{ width: '100%' }}
+          />
+        </div>
+      </div>
+    </div>
+  );
+}
+
 /* ===== MAIN COMPONENT ===== */
 export default function ClientDetail() {
   const { id } = useParams();
@@ -264,6 +633,9 @@ export default function ClientDetail() {
   const [invoices, setInvoices] = useState([]);
   const [payments, setPayments] = useState([]);
   const [activity, setActivity] = useState([]);
+  const [showSSN, setShowSSN] = useState(false);
+  const [notes, setNotes] = useState([]);
+  const [newNote, setNewNote] = useState('');
   const [loading, setLoading] = useState(true);
   const [activeTab, setActiveTab] = useState('overview');
   const [isEditing, setIsEditing] = useState(false);
@@ -271,7 +643,16 @@ export default function ClientDetail() {
   const [editForm, setEditForm] = useState({});
   const [saving, setSaving] = useState(false);
   const [payModal, setPayModal] = useState(null);
+  const [viewInvoice, setViewInvoice] = useState(null);
+  const [editInvoice, setEditInvoice] = useState(null);
   const [toast, setToast] = useState(null);
+  const [otherEditors, setOtherEditors] = useState([]);
+  const [serviceModal, setServiceModal] = useState(false);
+  const [serviceForm, setServiceForm] = useState({});
+  const [editingServiceId, setEditingServiceId] = useState(null);
+  const [savingService, setSavingService] = useState(false);
+  const presenceChannelRef = useRef(null);
+  const isLockHolderRef = useRef(false);
 
   const showToast = (msg, type = 'success') => {
     setToast({ msg, type });
@@ -286,19 +667,25 @@ export default function ClientDetail() {
         { data: cs },
         { data: sv },
         { data: inv },
-        { data: pay },
         { data: act },
+        { data: cn },
       ] = await Promise.all([
         supabase.from('clients').select('*').eq('id', id).single(),
         supabase.from('client_owners').select('*').eq('client_id', id),
-        supabase.from('client_services').select('*, services(name, category, default_price, frequency)').eq('client_id', id),
-        supabase.from('services').select('*').eq('active', true).order('name'),
+        supabase.from('client_services').select('*, services(name, category, price, frequency)').eq('client_id', id),
+        supabase.from('services').select('*').eq('is_active', true).order('name'),
         supabase.from('invoices').select('*').eq('client_id', id).order('issue_date', { ascending: false }),
-        supabase.from('payments').select('*, invoices(invoice_number)').eq('client_id', id).order('payment_date', { ascending: false }),
-        supabase.from('activity_log').select('*').eq('client_id', id).order('created_at', { ascending: false }).limit(50),
+        supabase.from('activity_log').select('*').eq('client_id', id).order('timestamp', { ascending: false }).limit(50),
+        supabase.from('client_notes').select('*').eq('client_id', id).order('created_at', { ascending: false }),
       ]);
 
+      const invoiceIds = (inv || []).map(i => i.id);
+      const { data: pay } = invoiceIds.length > 0
+        ? await supabase.from('payments').select('*, invoices(invoice_number)').in('invoice_id', invoiceIds)
+        : { data: [] };
+
       setClient(cl);
+      setNotes(cn || []);
       setOwners(ow || []);
       setClientServices(cs || []);
       setAllServices(sv || []);
@@ -309,8 +696,18 @@ export default function ClientDetail() {
       (pay || []).forEach(p => { paidMap[p.invoice_id] = (paidMap[p.invoice_id] || 0) + p.amount; });
       setInvoices((inv || []).map(i => ({ ...i, _paid: paidMap[i.id] || 0, _balance: Math.max(0, (i.total || 0) - (paidMap[i.id] || 0)) })));
 
-      if (cl?.locked_by && cl.locked_by !== user?.id) setLockOwner(cl.locked_by);
-      else setLockOwner(null);
+      if (cl?.locked_by && cl.locked_by !== user?.id) {
+        const lockedAt = cl.locked_at ? new Date(cl.locked_at) : null;
+        const isStale = !lockedAt || (Date.now() - lockedAt.getTime() > 30 * 1000);
+        if (isStale) {
+          setLockOwner(null);
+          supabase.from('clients').update({ locked_by: null, locked_at: null }).eq('id', id).catch(() => {});
+        } else {
+          setLockOwner(cl.locked_by);
+        }
+      } else {
+        setLockOwner(null);
+      }
     } catch (err) {
       console.error(err);
     } finally {
@@ -320,16 +717,45 @@ export default function ClientDetail() {
 
   useEffect(() => { loadAll(); }, [loadAll]);
 
+  useEffect(() => {
+    const currentEmail = user?.email;
+    if (!currentEmail || !id) return;
+    const channel = supabase.channel(`editing-client-${id}`);
+    presenceChannelRef.current = channel;
+    channel.on('presence', { event: 'sync' }, () => {
+      const others = Object.values(channel.presenceState()).flat().filter(p => p.email !== currentEmail);
+      setOtherEditors(others);
+    }).subscribe(async (status) => {
+      if (status === 'SUBSCRIBED') {
+        await channel.track({ email: currentEmail, online_at: new Date().toISOString() });
+      }
+    });
+    return () => { supabase.removeChannel(channel); };
+  }, [id, user?.email]);
+
+  useEffect(() => {
+    return () => {
+      if (isLockHolderRef.current) {
+        supabase.from('clients').update({ locked_by: null, locked_at: null }).eq('id', id).catch(() => {});
+        isLockHolderRef.current = false;
+      }
+    };
+  }, [id]);
+
   const startEdit = async () => {
     setEditForm({ ...client });
     try {
       await supabase.from('clients').update({ locked_by: user?.id, locked_at: new Date().toISOString() }).eq('id', id);
+      isLockHolderRef.current = true;
     } catch (_) {}
     setIsEditing(true);
   };
 
   const cancelEdit = async () => {
-    try { await supabase.from('clients').update({ locked_by: null, locked_at: null }).eq('id', id); } catch (_) {}
+    try {
+      await supabase.from('clients').update({ locked_by: null, locked_at: null }).eq('id', id);
+    } catch (_) {}
+    isLockHolderRef.current = false;
     setIsEditing(false);
   };
 
@@ -337,17 +763,36 @@ export default function ClientDetail() {
     setSaving(true);
     const { error } = await supabase.from('clients').update({ ...editForm, locked_by: null, locked_at: null }).eq('id', id);
     if (error) { showToast(error.message, 'error'); setSaving(false); return; }
-    await supabase.from('activity_log').insert({ client_id: id, user_id: user?.id, action: 'Client Updated', details: 'Client information updated' });
+    await supabase.from('activity_log').insert({ client_id: id, created_by: user?.id, type: 'Client Updated', description: 'Client information updated' });
+    isLockHolderRef.current = false;
     setSaving(false);
     setIsEditing(false);
     loadAll();
     showToast('Client saved successfully');
   };
 
+  const postNote = async () => {
+    const content = newNote.trim();
+    if (!content) return;
+    const { data: { user: authUser } } = await supabase.auth.getUser();
+    const { error } = await supabase.from('client_notes').insert({ client_id: id, content, created_by: authUser?.email || '' });
+    if (error) { showToast(error.message, 'error'); return; }
+    setNewNote('');
+    const { data: cn } = await supabase.from('client_notes').select('*').eq('client_id', id).order('created_at', { ascending: false });
+    setNotes(cn || []);
+  };
+
+  const deleteNote = async (noteId) => {
+    if (!window.confirm('Delete this note?')) return;
+    await supabase.from('client_notes').delete().eq('id', noteId);
+    setNotes(prev => prev.filter(n => n.id !== noteId));
+  };
+
   const handleToggleStatus = async () => {
-    const newStatus = client.status === 'active' ? 'inactive' : 'active';
+    const isActive = (client.status || '').toLowerCase() === 'active';
+    const newStatus = isActive ? 'Inactive' : 'Active';
     await supabase.from('clients').update({ status: newStatus }).eq('id', id);
-    await supabase.from('activity_log').insert({ client_id: id, user_id: user?.id, action: `Client ${newStatus === 'active' ? 'Activated' : 'Deactivated'}`, details: `Status changed to ${newStatus}` });
+    await supabase.from('activity_log').insert({ client_id: id, created_by: user?.id, type: isActive ? 'Client Deactivated' : 'Client Activated', description: `Status changed to ${newStatus}` });
     loadAll();
     showToast(`Client set to ${newStatus}`);
   };
@@ -380,11 +825,11 @@ export default function ClientDetail() {
       [],
       ['=== OWNERS ==='],
       ['Name','Email','Phone','Ownership %'],
-      ...owners.map(o => [o.name, o.email, o.phone, o.ownership_percent]),
+      ...owners.map(o => [o.owner_name, o.email, o.phone, o.ownership_pct]),
       [],
       ['=== SERVICES ==='],
       ['Service','Category','Price','Frequency'],
-      ...clientServices.map(cs => [cs.services?.name, cs.services?.category, cs.price || cs.services?.default_price, cs.frequency || cs.services?.frequency]),
+      ...clientServices.map(cs => [cs.services?.name, cs.services?.category, cs.custom_price || cs.services?.price, cs.frequency || cs.services?.frequency]),
       [],
       ['=== INVOICES ==='],
       ['Invoice #','Date','Due Date','Total','Paid','Balance','Status'],
@@ -401,8 +846,86 @@ export default function ClientDetail() {
 
   const setEF = (k, v) => setEditForm(f => ({ ...f, [k]: v }));
 
+  const toggleQB = async (invId, current) => {
+    const newVal = !current;
+    await supabase.from('invoices').update({ in_quickbooks: newVal }).eq('id', invId);
+    setInvoices(prev => prev.map(i => i.id === invId ? { ...i, in_quickbooks: newVal } : i));
+  };
+
+  const recalcInvoiceAfterPaymentDelete = async (invoiceId) => {
+    const { data: remaining } = await supabase.from('payments').select('amount').eq('invoice_id', invoiceId);
+    const totalPaid = (remaining || []).reduce((sum, p) => sum + p.amount, 0);
+    const { data: inv } = await supabase.from('invoices').select('total').eq('id', invoiceId).single();
+    const newBalance = (inv?.total || 0) - totalPaid;
+    const newStatus = newBalance <= 0 ? 'Paid' : totalPaid > 0 ? 'Partial' : 'Unpaid';
+    await supabase.from('invoices').update({ balance_due: newBalance, status: newStatus }).eq('id', invoiceId);
+  };
+
+  const handlePaymentDelete = async (paymentId) => {
+    if (!confirm('Delete this payment record?')) return;
+    const payment = payments.find(p => p.id === paymentId);
+    await supabase.from('payments').delete().eq('id', paymentId);
+    if (payment?.invoice_id) await recalcInvoiceAfterPaymentDelete(payment.invoice_id);
+    loadAll();
+    showToast('Payment deleted');
+  };
+
+  const setSF = (k, v) => setServiceForm(f => ({ ...f, [k]: v }));
+
+  const openAddService = () => {
+    setEditingServiceId(null);
+    setServiceForm({ service_id: '', custom_price: '', frequency: '', start_date: '', end_date: '', status: 'Active', notes: '' });
+    setServiceModal(true);
+  };
+
+  const openEditService = (cs) => {
+    setEditingServiceId(cs.id);
+    setServiceForm({
+      service_id: cs.service_id || '',
+      custom_price: cs.custom_price != null ? String(cs.custom_price) : '',
+      frequency: cs.frequency || '',
+      start_date: cs.start_date || '',
+      end_date: cs.end_date || '',
+      status: cs.status || 'Active',
+      notes: cs.notes || '',
+    });
+    setServiceModal(true);
+  };
+
+  const handleServiceSave = async () => {
+    if (!serviceForm.service_id) { showToast('Please select a service', 'error'); return; }
+    setSavingService(true);
+    const payload = {
+      client_id: id,
+      service_id: serviceForm.service_id,
+      custom_price: serviceForm.custom_price !== '' ? parseFloat(serviceForm.custom_price) : null,
+      frequency: serviceForm.frequency || null,
+      start_date: serviceForm.start_date || null,
+      end_date: serviceForm.end_date || null,
+      status: serviceForm.status || 'Active',
+      notes: serviceForm.notes || null,
+    };
+    if (editingServiceId) {
+      await supabase.from('client_services').update(payload).eq('id', editingServiceId);
+    } else {
+      await supabase.from('client_services').insert(payload);
+    }
+    setSavingService(false);
+    setServiceModal(false);
+    loadAll();
+    showToast(editingServiceId ? 'Service updated' : 'Service added');
+  };
+
+  const handleServiceDelete = async (csId) => {
+    if (!confirm('Remove this service from the client?')) return;
+    await supabase.from('client_services').delete().eq('id', csId);
+    loadAll();
+    showToast('Service removed');
+  };
+
   const TABS = [
     { id: 'overview', icon: 'info', label: 'Overview' },
+    { id: 'intake', icon: 'assignment', label: 'Intake Sheet' },
     { id: 'invoices', icon: 'receipt_long', label: `Invoices (${invoices.length})` },
     { id: 'payments', icon: 'payments', label: `Payments (${payments.length})` },
     { id: 'services', icon: 'inventory_2', label: 'Services' },
@@ -437,6 +960,13 @@ export default function ClientDetail() {
         <div className="lock-banner">
           <span className="material-symbols-outlined">lock</span>
           <strong>Record Locked:</strong> Another user is currently editing this client. Proceed with caution — changes may conflict.
+        </div>
+      )}
+
+      {otherEditors.length > 0 && (
+        <div style={{ background: '#fff3cd', border: '1px solid #ffc107', borderRadius: 8, padding: '10px 16px', marginBottom: 16, display: 'flex', alignItems: 'center', gap: 8 }}>
+          <span className="material-symbols-outlined" style={{ color: '#f59e0b' }}>warning</span>
+          <span><strong>{otherEditors[0].email}</strong> is currently viewing this record. Saving may overwrite their changes.</span>
         </div>
       )}
 
@@ -478,8 +1008,8 @@ export default function ClientDetail() {
                 <span className="material-symbols-outlined">download</span> CSV
               </button>
               <button className="btn btn-secondary btn-sm" onClick={handleToggleStatus}>
-                <span className="material-symbols-outlined">{client.status === 'active' ? 'person_off' : 'person'}</span>
-                {client.status === 'active' ? 'Deactivate' : 'Activate'}
+                <span className="material-symbols-outlined">{(client.status || '').toLowerCase() === 'active' ? 'person_off' : 'person'}</span>
+                {(client.status || '').toLowerCase() === 'active' ? 'Deactivate' : 'Activate'}
               </button>
               <button className="btn btn-primary btn-sm" onClick={() => navigate(`/invoices?new=1&client_id=${id}`)}>
                 <span className="material-symbols-outlined">add</span> New Invoice
@@ -507,16 +1037,55 @@ export default function ClientDetail() {
             <div className="card-body">
               {isEditing ? (
                 <div className="form-grid">
-                  {[
-                    ['Business Name','business_name'], ['Entity Type','entity_type'],
-                    ['EIN','ein'], ['Engagement Type','engagement_type'], ['Status','status'],
-                    ['Business Address','business_address'], ['Preferred Payment Method','preferred_payment_method'],
-                  ].map(([label, key]) => (
-                    <div className="form-group" key={key}>
-                      <label className="form-label">{label}</label>
-                      <input className="form-input" value={editForm[key] || ''} onChange={e => setEF(key, e.target.value)} />
-                    </div>
-                  ))}
+                  <div className="form-group">
+                    <label className="form-label">Business Name</label>
+                    <input className="form-input" value={editForm.business_name || ''} onChange={e => setEF('business_name', e.target.value)} />
+                  </div>
+                  <div className="form-group">
+                    <label className="form-label">Entity Type</label>
+                    <select className="form-select" value={editForm.entity_type || ''} onChange={e => setEF('entity_type', e.target.value)}>
+                      <option value="">— Select —</option>
+                      {['Sole Proprietorship','Partnership','S-Corp','C-Corp','LLC','Disregarded Entity','Individual'].map(o => <option key={o}>{o}</option>)}
+                    </select>
+                  </div>
+                  <div className="form-group">
+                    <label className="form-label">EIN</label>
+                    <input className="form-input" value={editForm.ein || ''} onChange={e => setEF('ein', e.target.value)} />
+                  </div>
+                  <div className="form-group">
+                    <label className="form-label">Engagement Type</label>
+                    <input className="form-input" value={editForm.engagement_type || ''} onChange={e => setEF('engagement_type', e.target.value)} />
+                  </div>
+                  <div className="form-group">
+                    <label className="form-label">Status</label>
+                    <input className="form-input" value={editForm.status || ''} onChange={e => setEF('status', e.target.value)} />
+                  </div>
+                  <div className="form-group">
+                    <label className="form-label">Business Address</label>
+                    <input className="form-input" value={editForm.business_address || ''} onChange={e => setEF('business_address', e.target.value)} />
+                  </div>
+                  <div className="form-group">
+                    <label className="form-label">Preferred Payment Method</label>
+                    <input className="form-input" value={editForm.preferred_payment_method || ''} onChange={e => setEF('preferred_payment_method', e.target.value)} />
+                  </div>
+                  <div className="form-group">
+                    <label className="form-label">Annual Tax Filing Year End</label>
+                    <input className="form-input" value={editForm.tax_year_end || ''} onChange={e => setEF('tax_year_end', e.target.value)} placeholder="e.g. December 31" />
+                  </div>
+                  <div className="form-group">
+                    <label className="form-label">Payroll Frequency</label>
+                    <select className="form-select" value={editForm.payroll_frequency || ''} onChange={e => setEF('payroll_frequency', e.target.value)}>
+                      <option value="">— Select —</option>
+                      {['None','Weekly','Bi-Weekly','Semi-Monthly','Monthly'].map(o => <option key={o}>{o}</option>)}
+                    </select>
+                  </div>
+                  <div className="form-group">
+                    <label className="form-label">Federal 941 Deposit Frequency</label>
+                    <select className="form-select" value={editForm.payroll_tax_deposit_frequency || ''} onChange={e => setEF('payroll_tax_deposit_frequency', e.target.value)}>
+                      <option value="">— Select —</option>
+                      {['None','Semi-Weekly','Monthly','Quarterly'].map(o => <option key={o}>{o}</option>)}
+                    </select>
+                  </div>
                 </div>
               ) : (
                 <div className="info-grid">
@@ -528,6 +1097,9 @@ export default function ClientDetail() {
                     ['Status', client.status],
                     ['Business Address', client.business_address],
                     ['Preferred Payment Method', client.preferred_payment_method],
+                    ['Annual Tax Filing Year End', client.tax_year_end],
+                    ['Payroll Frequency', client.payroll_frequency],
+                    ['Federal 941 Deposit Frequency', client.payroll_tax_deposit_frequency],
                   ].filter(([, v]) => v).map(([k, v]) => (
                     <div className="info-item" key={k}>
                       <span className="info-label">{k}</span>
@@ -576,7 +1148,7 @@ export default function ClientDetail() {
                 <div>
                   {owners.map(o => (
                     <div key={o.id} style={{ padding: '10px 0', borderBottom: '1px solid var(--border)' }}>
-                      <div style={{ fontWeight: 600, color: 'var(--text)' }}>{o.name} {o.ownership_percent ? <span style={{ color: 'var(--text-muted)', fontWeight: 400 }}>({o.ownership_percent}%)</span> : ''}</div>
+                      <div style={{ fontWeight: 600, color: 'var(--text)' }}>{o.owner_name} {o.ownership_pct ? <span style={{ color: 'var(--text-muted)', fontWeight: 400 }}>({o.ownership_pct}%)</span> : ''}</div>
                       {o.email && <div style={{ fontSize: '0.82rem', color: 'var(--text-muted)' }}>{o.email}</div>}
                       {o.phone && <div style={{ fontSize: '0.82rem', color: 'var(--text-muted)' }}>{o.phone}</div>}
                     </div>
@@ -586,19 +1158,91 @@ export default function ClientDetail() {
             </div>
           </div>
 
-          {client.notes && (
+          {(client.owner_name || client.owner_ssn || client.owner_dob || client.owner_address) && (
             <div className="card">
-              <div className="card-header"><h3>Notes</h3></div>
+              <div className="card-header"><h3>Owner Information</h3></div>
               <div className="card-body">
-                {isEditing ? (
-                  <textarea className="form-textarea" rows={5} value={editForm.notes || ''} onChange={e => setEF('notes', e.target.value)} style={{ width: '100%' }} />
-                ) : (
-                  <p style={{ fontSize: '0.875rem', color: 'var(--text-secondary)', whiteSpace: 'pre-wrap' }}>{client.notes}</p>
-                )}
+                <div className="info-grid">
+                  {client.owner_name && (
+                    <div className="info-item" key="owner-name">
+                      <span className="info-label">Owner Name</span>
+                      <span className="info-value">{client.owner_name}</span>
+                    </div>
+                  )}
+                  {client.owner_ssn && (
+                    <div className="info-item" key="owner-ssn">
+                      <span className="info-label">SSN</span>
+                      <span className="info-value" style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+                        {showSSN ? client.owner_ssn : '•••-••-' + client.owner_ssn.slice(-4)}
+                        <button className="btn-icon" style={{ width: 22, height: 22 }} onClick={() => setShowSSN(v => !v)}>
+                          <span className="material-symbols-outlined" style={{ fontSize: 15 }}>{showSSN ? 'visibility_off' : 'visibility'}</span>
+                        </button>
+                      </span>
+                    </div>
+                  )}
+                  {client.owner_dob && (
+                    <div className="info-item" key="owner-dob">
+                      <span className="info-label">Date of Birth</span>
+                      <span className="info-value">{new Date(client.owner_dob + 'T00:00:00').toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' })}</span>
+                    </div>
+                  )}
+                  {client.owner_address && (
+                    <div className="info-item" key="owner-address">
+                      <span className="info-label">Owner Home Address</span>
+                      <span className="info-value">{client.owner_address}</span>
+                    </div>
+                  )}
+                </div>
               </div>
             </div>
           )}
+
+          <div className="card" style={{ gridColumn: 'span 2' }}>
+            <div className="card-header"><h3>Notes</h3></div>
+            <div className="card-body">
+              <div style={{ display: 'flex', gap: 8, marginBottom: 20 }}>
+                <textarea
+                  className="form-textarea"
+                  rows={3}
+                  value={newNote}
+                  onChange={e => setNewNote(e.target.value)}
+                  placeholder="Add a note..."
+                  style={{ flex: 1, resize: 'vertical' }}
+                  onKeyDown={e => { if (e.key === 'Enter' && (e.metaKey || e.ctrlKey)) postNote(); }}
+                />
+                <button className="btn btn-primary btn-sm" onClick={postNote} disabled={!newNote.trim()} style={{ alignSelf: 'flex-end' }}>
+                  <span className="material-symbols-outlined">send</span> Post Note
+                </button>
+              </div>
+              {notes.length === 0 ? (
+                <p style={{ fontSize: '0.875rem', color: 'var(--text-muted)', margin: 0 }}>No notes added yet</p>
+              ) : (
+                <div style={{ maxHeight: 400, overflowY: 'auto' }}>
+                  {notes.map((n, i) => (
+                    <div key={n.id} style={{ paddingBottom: 14, marginBottom: 14, borderBottom: i < notes.length - 1 ? '1px solid var(--border)' : 'none' }}>
+                      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 4 }}>
+                        <span style={{ fontWeight: 500, fontSize: '0.85rem' }}>{n.created_by}</span>
+                        <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+                          <span style={{ fontSize: '0.8rem', color: 'var(--text-muted)' }}>
+                            {n.created_at ? new Date(n.created_at).toLocaleString('en-US', { month: 'short', day: 'numeric', year: 'numeric', hour: '2-digit', minute: '2-digit' }) : ''}
+                          </span>
+                          <button onClick={() => deleteNote(n.id)} style={{ background: 'none', border: 'none', cursor: 'pointer', color: '#dc2626', padding: '2px 4px' }}>
+                            <span className="material-symbols-outlined" style={{ fontSize: 16 }}>delete</span>
+                          </button>
+                        </div>
+                      </div>
+                      <p style={{ margin: 0, fontSize: '0.875rem', color: 'var(--text-secondary)', whiteSpace: 'pre-wrap' }}>{n.content}</p>
+                    </div>
+                  ))}
+                </div>
+              )}
+            </div>
+          </div>
         </div>
+      )}
+
+      {activeTab === 'intake' && (
+        <IntakeTab client={client} clientId={id} user={user} onSaved={loadAll} />
       )}
 
       {activeTab === 'invoices' && (
@@ -612,28 +1256,47 @@ export default function ClientDetail() {
           <div className="table-scroll">
             <table>
               <thead>
-                <tr><th>Invoice #</th><th>Date</th><th>Due Date</th><th className="text-right">Total</th><th className="text-right">Balance</th><th>Status</th><th className="text-right">Actions</th></tr>
+                <tr><th>Invoice #</th><th>Date</th><th>Due Date</th><th className="text-right">Total</th><th className="text-right">Balance</th><th>Status</th><th style={{ textAlign: 'center' }}>QB</th><th className="text-right">Actions</th></tr>
               </thead>
               <tbody>
                 {invoices.length === 0 ? (
-                  <tr><td colSpan={7}><div className="empty-state"><span className="material-symbols-outlined">receipt_long</span><p>No invoices yet</p></div></td></tr>
+                  <tr><td colSpan={8}><div className="empty-state"><span className="material-symbols-outlined">receipt_long</span><p>No invoices yet</p></div></td></tr>
                 ) : invoices.map(inv => (
                   <tr key={inv.id}>
-                    <td className="font-mono" style={{ color: 'var(--primary)', fontWeight: 700, fontSize: '0.82rem' }}>{inv.invoice_number}</td>
+                    <td className="font-mono" style={{ color: 'var(--primary)', fontWeight: 700, fontSize: '0.82rem' }}>
+                      {inv.invoice_number}
+                      {inv.in_quickbooks && <span style={{ fontSize: '0.6rem', background: '#22c55e', color: 'white', borderRadius: 3, padding: '1px 4px', marginLeft: 5, fontWeight: 700, verticalAlign: 'middle' }}>QB</span>}
+                    </td>
                     <td style={{ fontSize: '0.82rem', color: 'var(--text-muted)' }}>{fmtDate(inv.issue_date)}</td>
                     <td style={{ fontSize: '0.82rem', color: 'var(--text-muted)' }}>{fmtDate(inv.due_date)}</td>
                     <td className="text-right" style={{ fontWeight: 600 }}>{fmt(inv.total)}</td>
-                    <td className="text-right" style={{ fontWeight: 700, color: inv._balance > 0 ? 'var(--danger)' : 'var(--success)' }}>{fmt(inv._balance)}</td>
+                    <td className="text-right" style={{ fontWeight: 700, color: (inv.status || '').toLowerCase() === 'paid' || inv._balance <= 0 ? 'var(--success)' : 'var(--danger)' }}>
+                      {(inv.status || '').toLowerCase() === 'paid' ? fmt(0) : fmt(inv._balance)}
+                    </td>
                     <td><StatusBadge status={inv.status} /></td>
+                    <td style={{ textAlign: 'center' }}>
+                      <input
+                        type="checkbox"
+                        checked={!!inv.in_quickbooks}
+                        onChange={() => toggleQB(inv.id, inv.in_quickbooks)}
+                        title="Synced to QuickBooks"
+                        style={{ cursor: 'pointer', width: 16, height: 16 }}
+                      />
+                    </td>
                     <td>
                       <div className="btn-group" style={{ justifyContent: 'flex-end' }}>
-                        {inv.status !== 'paid' && (
-                          <button className="btn-icon success" title="Record Payment" onClick={() => setPayModal(inv)}>
-                            <span className="material-symbols-outlined">payments</span>
-                          </button>
+                        {!['paid', 'void'].includes((inv.status || '').toLowerCase()) && (
+                          <>
+                            <button className="btn-icon" title="Edit Invoice" onClick={() => setEditInvoice(inv)}>
+                              <span className="material-symbols-outlined">edit</span>
+                            </button>
+                            <button className="btn-icon success" title="Record Payment" onClick={() => setPayModal(inv)}>
+                              <span className="material-symbols-outlined">payments</span>
+                            </button>
+                          </>
                         )}
-                        <button className="btn-icon" title="View in Invoices" onClick={() => navigate('/invoices')}>
-                          <span className="material-symbols-outlined">open_in_new</span>
+                        <button className="btn-icon" title="View Invoice" onClick={() => setViewInvoice(inv)}>
+                          <span className="material-symbols-outlined">visibility</span>
                         </button>
                       </div>
                     </td>
@@ -651,11 +1314,11 @@ export default function ClientDetail() {
           <div className="table-scroll">
             <table>
               <thead>
-                <tr><th>Date</th><th>Invoice #</th><th className="text-right">Amount</th><th>Method</th><th>Reference</th></tr>
+                <tr><th>Date</th><th>Invoice #</th><th className="text-right">Amount</th><th>Method</th><th>Reference</th><th className="text-right">Actions</th></tr>
               </thead>
               <tbody>
                 {payments.length === 0 ? (
-                  <tr><td colSpan={5}><div className="empty-state"><span className="material-symbols-outlined">payments</span><p>No payments recorded</p></div></td></tr>
+                  <tr><td colSpan={6}><div className="empty-state"><span className="material-symbols-outlined">payments</span><p>No payments recorded</p></div></td></tr>
                 ) : payments.map(p => (
                   <tr key={p.id}>
                     <td style={{ fontWeight: 500 }}>{fmtDate(p.payment_date)}</td>
@@ -663,12 +1326,19 @@ export default function ClientDetail() {
                     <td className="text-right" style={{ fontWeight: 700, color: 'var(--success)' }}>{fmt(p.amount)}</td>
                     <td><span className="badge badge-draft">{p.method || '—'}</span></td>
                     <td style={{ color: 'var(--text-muted)', fontSize: '0.82rem' }}>{p.reference_num || '—'}</td>
+                    <td>
+                      <div className="btn-group" style={{ justifyContent: 'flex-end' }}>
+                        <button className="btn-icon danger" title="Delete" onClick={() => handlePaymentDelete(p.id)}>
+                          <span className="material-symbols-outlined">delete</span>
+                        </button>
+                      </div>
+                    </td>
                   </tr>
                 ))}
               </tbody>
               {payments.length > 0 && (
                 <tfoot>
-                  <tr><td colSpan={2} style={{ fontWeight: 700 }}>Total</td><td className="text-right" style={{ fontWeight: 700, color: 'var(--success)' }}>{fmt(payments.reduce((s, p) => s + p.amount, 0))}</td><td colSpan={2} /></tr>
+                  <tr><td colSpan={2} style={{ fontWeight: 700 }}>Total</td><td className="text-right" style={{ fontWeight: 700, color: 'var(--success)' }}>{fmt(payments.reduce((s, p) => s + p.amount, 0))}</td><td colSpan={3} /></tr>
                 </tfoot>
               )}
             </table>
@@ -680,21 +1350,37 @@ export default function ClientDetail() {
         <div className="table-container">
           <div className="table-header">
             <h3>Services Enrolled</h3>
+            <button className="btn btn-primary btn-sm" onClick={openAddService}>
+              <span className="material-symbols-outlined">add</span>
+              Add Service
+            </button>
           </div>
           <div className="table-scroll">
             <table>
               <thead>
-                <tr><th>Service</th><th>Category</th><th className="text-right">Price</th><th>Frequency</th></tr>
+                <tr><th>Service</th><th>Category</th><th className="text-right">Price</th><th>Frequency</th><th>Start Date</th><th>Status</th><th className="text-right">Actions</th></tr>
               </thead>
               <tbody>
                 {clientServices.length === 0 ? (
-                  <tr><td colSpan={4}><div className="empty-state"><span className="material-symbols-outlined">inventory_2</span><p>No services enrolled</p></div></td></tr>
+                  <tr><td colSpan={7}><div className="empty-state"><span className="material-symbols-outlined">inventory_2</span><p>No services enrolled</p></div></td></tr>
                 ) : clientServices.map(cs => (
                   <tr key={cs.id}>
                     <td style={{ fontWeight: 600, color: 'var(--text)' }}>{cs.services?.name || '—'}</td>
                     <td><span className="badge badge-draft">{cs.services?.category || '—'}</span></td>
-                    <td className="text-right" style={{ fontWeight: 600 }}>{fmt(cs.price || cs.services?.default_price)}</td>
+                    <td className="text-right" style={{ fontWeight: 600 }}>{fmt(cs.custom_price ?? cs.services?.price)}</td>
                     <td style={{ color: 'var(--text-muted)', fontSize: '0.82rem' }}>{cs.frequency || cs.services?.frequency || '—'}</td>
+                    <td style={{ color: 'var(--text-muted)', fontSize: '0.82rem' }}>{fmtDate(cs.start_date)}</td>
+                    <td><span className={`badge badge-${(cs.status || 'active').toLowerCase()}`}>{cs.status || 'Active'}</span></td>
+                    <td>
+                      <div className="btn-group" style={{ justifyContent: 'flex-end' }}>
+                        <button className="btn-icon" title="Edit" onClick={() => openEditService(cs)}>
+                          <span className="material-symbols-outlined">edit</span>
+                        </button>
+                        <button className="btn-icon danger" title="Remove" onClick={() => handleServiceDelete(cs.id)}>
+                          <span className="material-symbols-outlined">delete</span>
+                        </button>
+                      </div>
+                    </td>
                   </tr>
                 ))}
               </tbody>
@@ -715,14 +1401,49 @@ export default function ClientDetail() {
               <div className="activity-item" key={a.id}>
                 <div className="activity-dot" />
                 <div className="activity-content">
-                  <div className="activity-action">{a.action}</div>
-                  {a.details && <div className="activity-meta">{a.details}</div>}
-                  <div className="activity-meta">{a.created_at ? new Date(a.created_at).toLocaleString('en-US', { month: 'short', day: 'numeric', year: 'numeric', hour: '2-digit', minute: '2-digit' }) : ''}</div>
+                  <div className="activity-action">{a.type}</div>
+                  {a.description && <div className="activity-meta">{a.description}</div>}
+                  <div className="activity-meta">{a.timestamp ? new Date(a.timestamp).toLocaleString('en-US', { month: 'short', day: 'numeric', year: 'numeric', hour: '2-digit', minute: '2-digit' }) : ''}</div>
                 </div>
               </div>
             ))}
           </div>
         </div>
+      )}
+
+      {editInvoice && (
+        <InvoiceModal
+          mode="edit"
+          invoice={editInvoice}
+          clients={client ? [client] : []}
+          onClose={() => setEditInvoice(null)}
+          onSaved={loadAll}
+        />
+      )}
+
+      {viewInvoice && (
+        <Modal
+          isOpen={!!viewInvoice}
+          title={`Invoice ${viewInvoice.invoice_number}`}
+          onClose={() => setViewInvoice(null)}
+          footer={<button className="btn btn-secondary" onClick={() => setViewInvoice(null)}>Close</button>}
+        >
+          <div className="info-grid">
+            <div className="info-item"><span className="info-label">Invoice Date</span><span className="info-value">{fmtDate(viewInvoice.issue_date)}</span></div>
+            <div className="info-item"><span className="info-label">Due Date</span><span className="info-value">{fmtDate(viewInvoice.due_date)}</span></div>
+            <div className="info-item"><span className="info-label">Total</span><span className="info-value" style={{ fontWeight: 700 }}>{fmt(viewInvoice.total)}</span></div>
+            <div className="info-item"><span className="info-label">Paid</span><span className="info-value" style={{ color: 'var(--success)', fontWeight: 600 }}>{fmt(viewInvoice._paid)}</span></div>
+            <div className="info-item"><span className="info-label">Balance Due</span><span className="info-value" style={{ color: viewInvoice._balance > 0 ? 'var(--danger)' : 'var(--success)', fontWeight: 700 }}>{fmt(viewInvoice._balance)}</span></div>
+            <div className="info-item"><span className="info-label">Status</span><span className="info-value"><StatusBadge status={viewInvoice.status} /></span></div>
+            <div className="info-item"><span className="info-label">QuickBooks</span><span className="info-value">{viewInvoice.in_quickbooks ? '✅ Synced' : '⬜ Not synced'}</span></div>
+          </div>
+          {viewInvoice.notes && (
+            <div style={{ marginTop: 16 }}>
+              <div className="info-label">Notes</div>
+              <p style={{ marginTop: 4, fontSize: '0.875rem', color: 'var(--text-secondary)', whiteSpace: 'pre-wrap' }}>{viewInvoice.notes}</p>
+            </div>
+          )}
+        </Modal>
       )}
 
       {payModal && (
@@ -732,6 +1453,68 @@ export default function ClientDetail() {
           onSaved={loadAll}
           user={user}
         />
+      )}
+
+      {serviceModal && (
+        <div className="modal-overlay" onClick={e => e.target === e.currentTarget && setServiceModal(false)}>
+          <div className="modal">
+            <div className="modal-header">
+              <h3>{editingServiceId ? 'Edit Service' : 'Add Service'}</h3>
+              <button className="btn-icon" onClick={() => setServiceModal(false)}><span className="material-symbols-outlined">close</span></button>
+            </div>
+            <div className="modal-body">
+              <div className="form-grid">
+                <div className="form-group" style={{ gridColumn: 'span 2' }}>
+                  <label className="form-label">Service *</label>
+                  <select className="form-input" value={serviceForm.service_id} onChange={e => setSF('service_id', e.target.value)} disabled={!!editingServiceId}>
+                    <option value="">Select a service…</option>
+                    {allServices.map(s => <option key={s.id} value={s.id}>{s.name}{s.category ? ` (${s.category})` : ''}</option>)}
+                  </select>
+                </div>
+                <div className="form-group">
+                  <label className="form-label">Custom Price</label>
+                  <input type="number" className="form-input" placeholder="Leave blank to use default" value={serviceForm.custom_price} onChange={e => setSF('custom_price', e.target.value)} step="0.01" min="0" />
+                </div>
+                <div className="form-group">
+                  <label className="form-label">Frequency</label>
+                  <select className="form-input" value={serviceForm.frequency} onChange={e => setSF('frequency', e.target.value)}>
+                    <option value="">Use service default</option>
+                    <option>Monthly</option>
+                    <option>Quarterly</option>
+                    <option>Annual</option>
+                    <option>One-time</option>
+                  </select>
+                </div>
+                <div className="form-group">
+                  <label className="form-label">Start Date</label>
+                  <input type="date" className="form-input" value={serviceForm.start_date} onChange={e => setSF('start_date', e.target.value)} />
+                </div>
+                <div className="form-group">
+                  <label className="form-label">End Date</label>
+                  <input type="date" className="form-input" value={serviceForm.end_date} onChange={e => setSF('end_date', e.target.value)} />
+                </div>
+                <div className="form-group">
+                  <label className="form-label">Status</label>
+                  <select className="form-input" value={serviceForm.status} onChange={e => setSF('status', e.target.value)}>
+                    <option>Active</option>
+                    <option>Inactive</option>
+                    <option>Paused</option>
+                  </select>
+                </div>
+                <div className="form-group" style={{ gridColumn: 'span 2' }}>
+                  <label className="form-label">Notes</label>
+                  <textarea className="form-input" rows={2} value={serviceForm.notes} onChange={e => setSF('notes', e.target.value)} />
+                </div>
+              </div>
+            </div>
+            <div className="modal-footer">
+              <button className="btn btn-secondary" onClick={() => setServiceModal(false)}>Cancel</button>
+              <button className="btn btn-primary" onClick={handleServiceSave} disabled={savingService}>
+                {savingService ? 'Saving…' : editingServiceId ? 'Save Changes' : 'Add Service'}
+              </button>
+            </div>
+          </div>
+        </div>
       )}
     </div>
   );

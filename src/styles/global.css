@@ -1107,3 +1107,10 @@ tbody tr.clickable { cursor: pointer; }
 ::-webkit-scrollbar-track { background: transparent; }
 ::-webkit-scrollbar-thumb { background: var(--border-dark); border-radius: 3px; }
 ::-webkit-scrollbar-thumb:hover { background: #93a8c0; }
+
+/* ===== PRINT ===== */
+@media print {
+  .no-print { display: none !important; }
+  .sidebar, .topbar { display: none !important; }
+  .main-content { margin: 0 !important; padding: 0 !important; }
+}

@@ -7,7 +7,19 @@
       "PowerShell(Test-NetConnection *)",
       "Bash(git init *)",
       "Bash(git add *)",
-      "Bash(git commit *)"
+      "Bash(git commit *)",
+      "Bash(npx tsc *)",
+      "Bash(npm install *)",
+      "Bash(node -e \"require\\('./node_modules/xlsx/xlsx.js'\\); console.log\\('ok'\\)\")",
+      "Bash(git remote *)",
+      "Bash(git push *)",
+      "WebFetch(domain:bugajwmhquptdmofirke.supabase.co)",
+      "Bash(curl *)",
+      "Bash(node -e ' *)",
+      "Bash(Get-Content \"C:\\\\Users\\\\adbsh\\\\AppData\\\\Local\\\\Temp\\\\claude\\\\E--st-tax-billing-system-st-billing-react\\\\c24d0c78-ae51-41f2-80fd-ca0df67a21c2\\\\tasks\\\\b3a0o3xjm.output\" -Wait)",
+      "Bash(Select-String -Pattern \"Local:|Error|error|EADDRINUSE|ready\")",
+      "Bash(node schema-audit.mjs)",
+      "Bash(Remove-Item schema-audit.mjs)"
     ]
   }
 }

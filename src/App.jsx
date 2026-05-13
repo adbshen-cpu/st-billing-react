@@ -1,5 +1,6 @@
 import { BrowserRouter, Routes, Route, Navigate } from 'react-router-dom';
 import { AuthProvider } from './contexts/AuthContext';
+import AuthGuard from './components/AuthGuard';
 import Layout from './components/Layout';
 import Login from './pages/Login';
 import Dashboard from './pages/Dashboard';
@@ -15,23 +16,25 @@ import Settings from './pages/Settings';
 
 export default function App() {
   return (
-    <BrowserRouter>
+    <BrowserRouter basename="/st-billing-react">
       <AuthProvider>
         <Routes>
           <Route path="/login" element={<Login />} />
-          <Route element={<Layout />}>
-            <Route index element={<Navigate to="/dashboard" replace />} />
-            <Route path="/dashboard" element={<Dashboard />} />
-            <Route path="/clients" element={<Clients />} />
-            <Route path="/clients/new" element={<NewClient />} />
-            <Route path="/clients/:id" element={<ClientDetail />} />
-            <Route path="/invoices" element={<Invoices />} />
-            <Route path="/payments" element={<Payments />} />
-            <Route path="/ar-aging" element={<ARAging />} />
-            <Route path="/services" element={<Services />} />
-            <Route path="/reports" element={<Reports />} />
-            <Route path="/settings" element={<Settings />} />
-            <Route path="*" element={<Navigate to="/dashboard" replace />} />
+          <Route element={<AuthGuard />}>
+            <Route element={<Layout />}>
+              <Route index element={<Navigate to="/dashboard" replace />} />
+              <Route path="/dashboard" element={<Dashboard />} />
+              <Route path="/clients" element={<Clients />} />
+              <Route path="/clients/new" element={<NewClient />} />
+              <Route path="/clients/:id" element={<ClientDetail />} />
+              <Route path="/invoices" element={<Invoices />} />
+              <Route path="/payments" element={<Payments />} />
+              <Route path="/ar-aging" element={<ARAging />} />
+              <Route path="/services" element={<Services />} />
+              <Route path="/reports" element={<Reports />} />
+              <Route path="/settings" element={<Settings />} />
+              <Route path="*" element={<Navigate to="/dashboard" replace />} />
+            </Route>
           </Route>
         </Routes>
       </AuthProvider>

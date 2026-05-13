@@ -4,7 +4,7 @@ import { supabase } from '../lib/supabase';
 import { useAuth } from '../contexts/AuthContext';
 
 const initialForm = {
-  business_name: '', entity_type: '', status: 'active', engagement_type: '',
+  business_name: '', entity_type: '', status: 'Active', engagement_type: '',
   primary_email: '', primary_phone: '', business_address: '',
   preferred_payment_method: '', retainer_balance: '',
   notes: '',
@@ -48,9 +48,18 @@ export default function NewClient() {
     setError('');
 
     try {
+      const { data: lastClient } = await supabase
+        .from('clients')
+        .select('client_number')
+        .order('client_number', { ascending: false })
+        .limit(1);
+      const lastNum = parseInt(lastClient?.[0]?.client_number?.replace('C-', '') || '0');
+      const clientNumber = `C-${String(lastNum + 1).padStart(4, '0')}`;
+
       const { data: clientData, error: clientErr } = await supabase
         .from('clients')
         .insert({
+          client_number: clientNumber,
           business_name: form.business_name, entity_type: form.entity_type || null,
           status: form.status, engagement_type: form.engagement_type || null,
           primary_email: form.primary_email || null, primary_phone: form.primary_phone || null,
